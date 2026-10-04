@@ -45,7 +45,7 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
                     "surface": request.surface,
                     "dispatch_idempotency_key": request.dispatch_idempotency_key,
                     "fallback_ids": list(request.fallback_logical_model_ids),
-                    "traceparent": request.traceparent,
+                    "traceparent": request.traceparent or _metadata(context, "traceparent"),
                     "tracestate": request.tracestate,
                 }
             )
@@ -114,6 +114,13 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
             grpc.StatusCode.UNIMPLEMENTED,
             "GroundedSearch is retired; use Invoke response_modality=GROUNDED or /v1/responses",
         )
+
+
+def _metadata(context: Any, name: str) -> str:
+    for item in context.invocation_metadata():
+        if item.key == name and item.value:
+            return item.value
+    return ""
 
 
 async def start_grpc(gateway: Gateway, port: int) -> Any:
