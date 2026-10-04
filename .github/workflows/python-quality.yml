@@ -10,18 +10,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-quality-${{ github.workflow }}-${{ github.ref }}
+  group: python-quality-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   quality:
-    name: ${{ matrix.check }}
+    name: Python quality
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        check: [ruff-lint, ruff-format, mypy, bandit, pytest]
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -39,21 +34,16 @@ jobs:
         run: uv sync --all-groups
 
       - name: Ruff lint
-        if: matrix.check == 'ruff-lint'
         run: uv run ruff check app tests
 
       - name: Ruff format
-        if: matrix.check == 'ruff-format'
-        run: uv run ruff format app tests
+        run: uv run ruff format --check app tests
 
       - name: Mypy
-        if: matrix.check == 'mypy'
         run: uv run mypy
 
       - name: Bandit
-        if: matrix.check == 'bandit'
         run: uv run bandit -c pyproject.toml -r app
 
       - name: Pytest
-        if: matrix.check == 'pytest'
         run: uv run pytest --cov=app --cov-report=term-missing
