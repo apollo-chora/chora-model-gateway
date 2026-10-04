@@ -63,10 +63,12 @@ show_error_codes = true
 module = ["asyncpg.*", "blacksheep.*"]
 ignore_missing_imports = true
 
-# The protobuf stubs are generated at build time and their classes are
-# injected dynamically, so mypy cannot see them statically.
+# The protobuf stubs are generated at build time and are not present in the
+# source tree. When they are absent mypy cannot find the module; when they
+# present their classes are injected dynamically. Both cases are handled here.
 [[tool.mypy.overrides]]
 module = ["model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
+ignore_missing_imports = true
 follow_imports = "skip"
 
 [tool.bandit]
