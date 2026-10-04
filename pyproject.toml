@@ -53,7 +53,7 @@ no_implicit_optional = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["asyncpg.*", "blacksheep.*", "granian.*", "strands.*", "model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
+module = ["asyncpg.*", "blacksheep.*", "strands.*", "model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
 ignore_missing_imports = true
 
 [tool.bandit]
