@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py313"
 extend-exclude = ["model_gateway_service_pb2.py", "model_gateway_service_pb2_grpc.py"]
 
