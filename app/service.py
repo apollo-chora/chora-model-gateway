@@ -40,6 +40,10 @@ class Gateway:
         started = time.monotonic()
         invocation_id = request.get("invocation_id") or str(uuid.uuid4())
         spec = self.model(request.get("model") or request.get("logical_model_id"))
+        modality = request.get("modality") or "TEXT"
+        required = "image" if modality == "IMAGE" else ("web_search" if modality == "GROUNDED" else "chat")
+        if required not in spec.capabilities:
+            raise GatewayError(400, "grounding_unavailable" if required == "web_search" else "invalid_model_capability", f'model "{spec.id}" does not advertise the "{required}" capability')
         tenant = request.get("tenant_id") or self.settings.default_tenant_id
         gcid = request.get("gcid") or self.settings.default_gcid
         agent = request.get("agent_id") or self.settings.default_agent_id
@@ -111,6 +115,8 @@ class Gateway:
     async def embed(self, request: dict[str, Any]) -> dict[str, Any]:
         invocation_id = request.get("invocation_id") or str(uuid.uuid4())
         spec = self.model(request.get("model") or request.get("logical_model_id") or "text-embedding-004")
+        if "embeddings" not in spec.capabilities and spec.kind != "embedding":
+            raise GatewayError(500, "gateway_misconfigured", f'embed: model "{spec.id}" does not advertise the "embeddings" capability')
         tenant = request.get("tenant_id") or self.settings.default_tenant_id
         gcid = request.get("gcid") or self.settings.default_gcid
         agent = request.get("agent_id") or self.settings.default_agent_id
