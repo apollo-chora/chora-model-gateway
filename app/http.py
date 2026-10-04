@@ -6,6 +6,7 @@ from typing import Any
 
 from blacksheep import Application, Request
 from blacksheep.server.responses import json as reply
+from blacksheep.server.responses import text
 
 from .compat import embedding_inputs, flatten_responses_input, generation_params, model_entry, wants_grounding
 from .service import Gateway, GatewayError
@@ -29,13 +30,11 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
 
     @app.router.get("/healthz")
     async def health() -> Any:
-        from blacksheep.server.responses import text
         return text("ok")
 
     @app.router.get("/readyz")
     async def ready() -> Any:
         ok = await db.ping()
-        from blacksheep.server.responses import text
         return text("ready" if ok else "not_ready", status=200 if ok else 503)
 
     @app.router.get("/v1/models")
@@ -72,17 +71,23 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
                 "streaming_unsupported",
                 'this gateway does not implement SSE streaming; retry with "stream": false',
             )
-        messages = body.get("messages") or [{"role": "user", "content": body.get("prompt", "")}]
+        if not body.get("model"):
+            raise GatewayError(400, "missing_parameter", '"model" is required and must name an entry in the model registry')
+        messages = body.get("messages") or ([{"role": "user", "content": body.get("prompt", "")}] if body.get("prompt") else [])
+        if not messages:
+            raise GatewayError(400, "missing_parameter", '"messages" must contain at least one message')
         prompt = ""
         system = ""
         for input_message in messages:
-            if input_message.get("role") == "system":
+            if input_message.get("role") in ("system", "developer"):
                 system += str(input_message.get("content", ""))
             elif input_message.get("role") == "user":
                 prompt = str(input_message.get("content", ""))
 
         tools = body.get("tools", [])
         grounded = wants_grounding(tools)
+        if not any(m.get("role") not in ("system", "developer") for m in messages):
+            raise GatewayError(400, "empty_conversation", "messages contains only a system prompt; add at least one user message")
         response = await gateway.invoke(
             attributes(request)
             | {
@@ -190,6 +195,10 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
     @app.router.post("/v1/images/edits")
     async def image(request: Request) -> Any:
         body = await request.json()
+        if not body.get("prompt"):
+            raise GatewayError(400, "missing_parameter", '"prompt" is required')
+        if not body.get("model"):
+            raise GatewayError(400, "missing_parameter", '"model" is required and must name an image-capable entry in the model registry')
         if body.get("response_format") == "url":
             raise GatewayError(501, "url_response_unsupported", "this gateway returns bytes, not hosted URLs")
         response = await gateway.invoke(
