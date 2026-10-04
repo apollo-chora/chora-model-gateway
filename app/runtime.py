@@ -51,7 +51,7 @@ class Runtime:
             return await self.anthropic(spec, prompt, system, messages, tools, values, grounded)
 
         if spec.format == "responses":
-            response_model = OpenAIResponsesModel(
+            response_model: Any = OpenAIResponsesModel(
                 model_id=spec.model,
                 client_args=self.args(spec),
                 params=values | ({"tools": [{"type": "web_search"}]} if grounded and spec.support_grounding else {}),
