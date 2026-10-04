@@ -1,0 +1,15 @@
+syntax="proto3";
+package chora.services.model_gateway.v1;
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+enum ModelArmorVerdict{MODEL_ARMOR_VERDICT_UNSPECIFIED=0;MODEL_ARMOR_VERDICT_ALLOW=1;MODEL_ARMOR_VERDICT_BLOCK=2;MODEL_ARMOR_VERDICT_SANITISE=3;MODEL_ARMOR_VERDICT_ERROR=4;MODEL_ARMOR_VERDICT_BYPASSED=5;}
+enum FinishReason{FINISH_REASON_UNSPECIFIED=0;FINISH_REASON_COMPLETE=1;FINISH_REASON_MAX_TOKENS=2;FINISH_REASON_MODEL_ARMOR_BLOCK=3;FINISH_REASON_BUDGET_BLOCK=4;FINISH_REASON_VENDOR_ERROR=5;FINISH_REASON_MANA_BLOCK=6;}
+message InvokeRequest{string invocation_id=1;string tenant_id=2;string gcid=3;string agent_id=4;string crew_kind=5;string logical_model_id=6;string prompt=7;string system_prompt=8;google.protobuf.Struct generation_config=9;string traceparent=10;string tracestate=11;repeated string fallback_logical_model_ids=12;string response_modality=13;string action_code=14;string contents_json=15;string tools_json=16;string surface=17;string dispatch_idempotency_key=18;}
+message TokenUsage{int64 input_tokens=1;int64 output_tokens=2;int64 cached_tokens=3;int64 cost_micros=4;}
+message InvokeResponse{string invocation_id=1;string completion=2;TokenUsage usage=3;string vendor=4;string model_version=5;ModelArmorVerdict model_armor_verdict_pre=6;ModelArmorVerdict model_armor_verdict_post=7;repeated string fallback_chain=8;int32 latency_ms=9;FinishReason finish_reason=10;string finish_detail=11;google.protobuf.Timestamp completed_at=12;string gateway_version=13;bytes image_bytes=14;string image_mime_type=15;string tool_calls_json=16;}
+message GroundedSearchRequest{string invocation_id=1;string tenant_id=2;string gcid=3;string agent_id=4;string crew_kind=5;string directive=6;int32 max_results=7;string logical_model_id=8;string action_code=9;string traceparent=10;string tracestate=11;}
+message GroundedCitation{string uri=1;string title=2;string domain=3;string snippet=4;float confidence=5;}
+message GroundedSearchResponse{string invocation_id=1;repeated GroundedCitation citations=2;string grounded_answer=3;string search_entry_point_html=4;repeated string web_search_queries=5;TokenUsage usage=6;string vendor=7;string model_version=8;ModelArmorVerdict model_armor_verdict_pre=9;ModelArmorVerdict model_armor_verdict_post=10;FinishReason finish_reason=11;string finish_detail=12;google.protobuf.Timestamp completed_at=13;string gateway_version=14;}
+message EmbedRequest{string invocation_id=1;string tenant_id=2;string gcid=3;string agent_id=4;string crew_kind=5;string logical_model_id=6;string text=7;string task_type=8;int32 output_dimensions=9;string traceparent=10;string tracestate=11;}
+message EmbedResponse{string invocation_id=1;repeated float values=2;string vendor=3;string model_version=4;TokenUsage usage=5;google.protobuf.Timestamp completed_at=6;string gateway_version=7;}
+service ModelGatewayService{rpc Invoke(InvokeRequest)returns(InvokeResponse);rpc GroundedSearch(GroundedSearchRequest)returns(GroundedSearchResponse);rpc Embed(EmbedRequest)returns(EmbedResponse);}
