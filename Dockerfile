@@ -18,8 +18,8 @@
 #
 # The binary is CGO_ENABLED=0 and static, so a single build serves both.
 
-ARG GO_VERSION=1.26.6
-ARG ALPINE_VERSION=3.23
+ARG GO_VERSION=1.27.1
+ARG ALPINE_VERSION=3.24
 ARG SERVICE_NAME=chora-model-gateway
 
 # ----------------------------------------------------------------------------
