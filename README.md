@@ -174,6 +174,12 @@ POST /v1/embeddings
 
 Both a single string and an array of strings are accepted.
 
+The gateway sends `dimensions` on the wire, defaulting to 768 when the caller
+does not ask for a size. A model with a fixed output width (OpenRouter's
+`liquid/lfm-2.5-embedding-350m:free`, for example, produces 1024-dimensional
+vectors) rejects any other value, so pass an explicit `"dimensions": 1024` for
+those.
+
 You can configure only the roles you actually use.
 
 ## Grounded web search
@@ -295,6 +301,16 @@ Supported RPCs:
 The old dedicated `GroundedSearch` RPC remains `UNIMPLEMENTED`. Grounding now goes through ordinary `Invoke` with the grounded modality or through `/v1/responses`.
 
 The protobuf source is in `proto/model_gateway_service.proto`; Python stubs are generated during the Docker build.
+
+## Events and messages
+
+The gateway has **no inbound event contract**. The original implementation
+only *recorded* internal usage: every completed dispatch wrote one row to
+`token_usage_ledger` (its "outbox"), keyed by the invocation id. It ran no
+Pub/Sub subscriber, consumed no queue, and exposed no event-ingestion
+endpoint — an external client cannot deliver an event to it. The Python
+gateway keeps exactly that behavior: the ledger row is the only usage
+output, and no event surface is invented here.
 
 ## PostgreSQL, budgets, and usage
 
