@@ -2,7 +2,11 @@
 
 These run against a real PostgreSQL and are skipped unless
 ``CHORA_TEST_DATABASE_URL`` is set. The Docker verification sets it to the
-Compose database, which has already applied migrations/0001 and 0002.
+Compose database, which has already applied migrations/0001-0003.
+
+The application role (chora_app) holds no DELETE privilege and RLS applies,
+so the fixture creates rows under the tenant GUC and cleans up through the
+superuser DSN in ``CHORA_TEST_ADMIN_DATABASE_URL`` when it is available.
 """
 
 from __future__ import annotations
@@ -19,7 +23,6 @@ pytestmark = pytest.mark.skipif(
     reason="CHORA_TEST_DATABASE_URL is not set",
 )
 
-TENANT = "00000000-0000-7000-8000-000000000001"
 GCID = "00000000-0000-7000-8000-000000000002"
 
 
@@ -32,10 +35,29 @@ async def db():
 
 
 @pytest.fixture
-async def tenant(db):
-    """An isolated tenant with a budget row, created and cleaned up per test."""
+async def admin():
+    """A superuser connection for row cleanup (chora_app cannot DELETE)."""
+    url = os.environ.get("CHORA_TEST_ADMIN_DATABASE_URL")
+    if not url:
+        yield None
+        return
+    database = Database(url)
+    await database.start()
+    yield database
+    await database.close()
+
+
+@pytest.fixture
+async def tenant(db, admin):
+    """An isolated tenant with a budget row, created and cleaned up per test.
+
+    The INSERT runs under the tenant GUC inside one transaction (the GUC is
+    transaction-local); cleanup uses the superuser DSN because chora_app
+    holds no DELETE privilege.
+    """
     tenant_id = str(uuid.uuid4())
-    async with db._pool().acquire() as connection:
+    async with db._pool().acquire() as connection, connection.transaction():
+        await connection.execute("SELECT set_config('chora.tenant_id', $1, true)", tenant_id)
         await connection.execute(
             """
             INSERT INTO per_tenant_llm_budget
@@ -45,9 +67,17 @@ async def tenant(db):
             tenant_id,
         )
     yield tenant_id
-    async with db._pool().acquire() as connection:
-        await connection.execute("DELETE FROM token_usage_ledger WHERE tenant_id=$1::uuid", tenant_id)
-        await connection.execute("DELETE FROM per_tenant_llm_budget WHERE tenant_id=$1::uuid", tenant_id)
+    if admin is not None:
+        async with admin._pool().acquire() as connection:
+            await connection.execute("DELETE FROM token_usage_ledger WHERE tenant_id=$1::uuid", tenant_id)
+            await connection.execute("DELETE FROM per_tenant_llm_budget WHERE tenant_id=$1::uuid", tenant_id)
+
+
+async def _as_tenant(db, tenant_id, fn):
+    """Run a read under the tenant's RLS scope, in one transaction."""
+    async with db._pool().acquire() as connection, connection.transaction():
+        await connection.execute("SELECT set_config('chora.tenant_id', $1, true)", tenant_id)
+        return await fn(connection)
 
 
 @pytest.mark.anyio
@@ -56,19 +86,20 @@ async def test_ping(db):
 
 
 @pytest.mark.anyio
-async def test_no_budget_row_allows(db, tenant):
+async def test_no_budget_row_allows(db, tenant, admin):
     assert await db.budget(tenant) is not None  # the fixture created one
-    async with db._pool().acquire() as connection:
+    async with admin._pool().acquire() as connection:
         await connection.execute("DELETE FROM per_tenant_llm_budget WHERE tenant_id=$1::uuid", tenant)
     assert await db.budget(tenant) is None
 
 
 @pytest.mark.anyio
 async def test_claim_dedupes_on_the_key(db):
-    assert await db.claim(GCID, "key-1", "agent") is True
-    assert await db.claim(GCID, "key-1", "agent") is False
+    key = f"key-{uuid.uuid4()}"
+    assert await db.claim(GCID, key, "agent") is True
+    assert await db.claim(GCID, key, "agent") is False
     # A different action code is a different claim.
-    assert await db.claim(GCID, "key-1", "other") is True
+    assert await db.claim(GCID, key, "other") is True
 
 
 @pytest.mark.anyio
@@ -100,7 +131,7 @@ async def test_settle_writes_the_debit_and_the_row_atomically(db, tenant):
     }
     await db.settle(event, 165)
 
-    async with db._pool().acquire() as connection:
+    async def read(connection):
         spent = await connection.fetchval(
             "SELECT spent_usd_micros FROM per_tenant_llm_budget WHERE tenant_id=$1::uuid",
             tenant,
@@ -109,6 +140,9 @@ async def test_settle_writes_the_debit_and_the_row_atomically(db, tenant):
             "SELECT cost_usd_micros, input_tokens, debit_deduped FROM token_usage_ledger WHERE invocation_id=$1",
             event["invocation_id"],
         )
+        return spent, row
+
+    spent, row = await _as_tenant(db, tenant, read)
     assert spent == 165
     assert row["cost_usd_micros"] == 165
     assert row["input_tokens"] == 100
@@ -137,7 +171,8 @@ async def test_settle_with_zero_debit_still_ledgers(db, tenant):
         "cost_usd_micros": 0,
     }
     await db.settle(event, 0)
-    async with db._pool().acquire() as connection:
+
+    async def read(connection):
         spent = await connection.fetchval(
             "SELECT spent_usd_micros FROM per_tenant_llm_budget WHERE tenant_id=$1::uuid",
             tenant,
@@ -146,6 +181,9 @@ async def test_settle_with_zero_debit_still_ledgers(db, tenant):
             "SELECT count(*) FROM token_usage_ledger WHERE invocation_id=$1",
             event["invocation_id"],
         )
+        return spent, count
+
+    spent, count = await _as_tenant(db, tenant, read)
     assert spent == 0
     assert count == 1
 
@@ -174,12 +212,13 @@ async def test_rls_scopes_rows_to_the_tenant(db, tenant):
     }
     # A ledger row for another tenant is written under that tenant's RLS scope.
     await db.settle(event, 0)
-    # Reading it back requires the same tenant GUC; the row is not visible
-    # to a different tenant.
-    async with db._pool().acquire() as connection:
-        await connection.execute("SELECT set_config('chora.tenant_id', $1, true)", tenant)
-        visible = await connection.fetchval(
+
+    # Reading it back under a different tenant's GUC returns nothing.
+    async def read(connection):
+        return await connection.fetchval(
             "SELECT count(*) FROM token_usage_ledger WHERE invocation_id=$1",
             event["invocation_id"],
         )
+
+    visible = await _as_tenant(db, tenant, read)
     assert visible == 0
