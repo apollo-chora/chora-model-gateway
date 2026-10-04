@@ -124,6 +124,15 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
                     "completion_tokens": response["usage"]["output"],
                     "total_tokens": response["usage"]["input"] + response["usage"]["output"],
                 },
+                "chora_gateway": {
+                    "vendor": response["vendor"],
+                    "fallback_chain": response["fallback_chain"],
+                    "latency_ms": response["latency_ms"],
+                    "invocation_id": response["id"],
+                    "grounded": grounded,
+                    "citations": result.citations,
+                    "search_queries": result.search_queries,
+                },
             }
         )
 
