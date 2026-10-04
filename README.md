@@ -424,6 +424,14 @@ Dependencies and tooling are managed by `uv`:
 uv sync --all-groups
 ```
 
+The gRPC tests import the generated protobuf stubs, which are produced by
+the Docker build and by CI. To generate them locally before running the
+suite:
+
+```bash
+uv run python -m grpc_tools.protoc -Iproto --python_out=. --grpc_python_out=. proto/model_gateway_service.proto
+```
+
 Run the same quality checks used in CI:
 
 ```bash

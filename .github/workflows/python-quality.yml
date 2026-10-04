@@ -33,6 +33,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --all-groups
 
+      - name: Generate protobuf stubs
+        run: uv run python -m grpc_tools.protoc -Iproto --python_out=. --grpc_python_out=. proto/model_gateway_service.proto
+
       - name: Ruff lint
         run: uv run ruff check app tests
 
