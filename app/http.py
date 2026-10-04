@@ -244,11 +244,11 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
             raise GatewayError(400, "invalid_parameter", str(exc)) from exc
         rows: list[dict[str, Any]] = []
         total = 0
-        for index, text in enumerate(inputs):
+        for index, input_text in enumerate(inputs):
             embedded = await gateway.embed(
                 attributes(request)
                 | {
-                    "model": body.get("model"), "text": text,
+                    "model": body.get("model"), "text": input_text,
                     "dimensions": int(body.get("dimensions", 0)),
                     "agent_id": gateway.settings.default_agent_id,
                 }
