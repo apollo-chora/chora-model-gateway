@@ -4,7 +4,7 @@ A local-first, provider-neutral model gateway for Chora.
 
 The gateway exposes OpenAI-compatible HTTP endpoints and the existing Chora gRPC contract while centralising model configuration, tenant budgets, usage accounting, fallback routing, and grounded search.
 
-The current runtime is Python 3.13 with **BlackSheep**, **Granian**, **Strands Agents**, **structlog**, **uv**, and PostgreSQL.
+The current runtime is Python 3.13 with **BlackSheep**, **Granian**, **structlog**, **uv**, and PostgreSQL. Provider dispatch goes through a single-shot HTTP transport for exact wire parity with the gateway's historical behavior; the OpenAI/Anthropic SDKs and Strands Agents remain available in the stack.
 
 ## Local Docker deployment
 
