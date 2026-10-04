@@ -55,14 +55,12 @@ class Gateway:
             if budget["policy"] == "downgrade" and budget["downgrade_to_logical_model_id"]:
                 spec = self.model(budget["downgrade_to_logical_model_id"])
 
-        claimed = await self.db.claim(
-            gcid, request.get("dispatch_idempotency_key", ""), request.get("action_code", agent)
-        )
-        chain = [spec] + [
-            self.model(model_id)
-            for model_id in request.get("fallback_ids", [])
-            if model_id.lower() in self.models
-        ]
+        dispatch_key = request.get("dispatch_idempotency_key", "")
+        claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code", agent)) if dispatch_key else True
+        fallback_ids = request.get("fallback_ids") or spec.fallback_ids
+        chain = [spec]
+        for model_id in fallback_ids:
+            chain.append(self.model(model_id))
         result: Result | None = None
         last_error: Exception | None = None
         tried: list[str] = []
