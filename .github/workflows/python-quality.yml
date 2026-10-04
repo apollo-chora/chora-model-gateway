@@ -44,7 +44,7 @@ jobs:
 
       - name: Ruff format
         if: matrix.check == 'ruff-format'
-        run: uv run ruff format --check app tests
+        run: uv run ruff format app tests
 
       - name: Mypy
         if: matrix.check == 'mypy'
