@@ -1,135 +1,43 @@
-# chora-model-gateway — standalone deployment.
-#
-#   docker compose up -d
-#
-# Brings up Postgres, applies the migrations, and starts the gateway. Nothing
-# else: no cloud account, no credential file, no cluster.
-#
-# This file builds from source. To run the published image instead, comment out
-# the `build:` block under `gateway:` and uncomment the `image:` line — the rest
-# of the service config is identical either way.
-#
-# Credentials come from .env (gitignored). Copy .env.example to .env and fill in
-# whichever providers you actually use; a registry entry whose key is unset is
-# REFUSED at boot rather than sending an unauthenticated request.
-
 name: chora-model-gateway
-
 services:
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
-
-    environment:
-      POSTGRES_USER: chora
-      POSTGRES_PASSWORD: chora
-      POSTGRES_DB: chora_observability
-
-    ports:
-      # Host port 5433 because 5432 is very often already taken by a local
-      # Postgres. The gateway connects over the compose network on 5432 and is
-      # unaffected.
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
-
-    volumes:
-      # Postgres 18 moved its data root: the mount point is
-      # /var/lib/postgresql, NOT /var/lib/postgresql/data. Mounting the old
-      # path makes the image refuse to start, because it finds an unexpected
-      # populated directory where its version subdirectory should be.
-      - pgdata:/var/lib/postgresql
-      # Applied in filename order on first boot, and re-applied idempotently
-      # thereafter (every statement is CREATE ... IF NOT EXISTS or
-      # DROP+CREATE POLICY).
-      - ./migrations:/docker-entrypoint-initdb.d:ro
-
-    healthcheck:
-      # Makes `docker compose up --wait` meaningful and keeps the gateway's
-      # boot log free of connection-refused noise.
-      test: ["CMD-SHELL", "pg_isready -U chora -d chora_observability"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-      start_period: 5s
-
-    stop_grace_period: 30s
-
+    environment: {POSTGRES_USER: chora, POSTGRES_PASSWORD: chora, POSTGRES_DB: chora_observability}
+    ports: ["${POSTGRES_HOST_PORT:-5433}:5432"]
+    volumes: ["pgdata:/var/lib/postgresql","./migrations:/docker-entrypoint-initdb.d:ro"]
+    healthcheck: {test: ["CMD-SHELL","pg_isready -U chora -d chora_observability"], interval: 2s, timeout: 3s, retries: 30}
   gateway:
-    build:
-      context: .
-      args:
-        GIT_SHA: ${GIT_SHA:-local}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
-    # image: walfa/chora-model-gateway:latest
+    build: .
+    image: walfa/chora-model-gateway:latest
     restart: unless-stopped
-
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-    ports:
-      # The OpenAI-compatible surface. Point any OpenAI client at
-      # http://localhost:${GATEWAY_HTTP_PORT}/v1
-      #
-      # The host ports are overridable because 8080 and 9090 are both commonly
-      # occupied. The container always listens on 8080 and 9090; only the
-      # published port moves.
-      - "${GATEWAY_HTTP_PORT:-8080}:8080"
-      # The gRPC surface.
-      - "${GATEWAY_GRPC_PORT:-9090}:9090"
-
-    extra_hosts:
-      # Lets the gateway reach an inference server on the host machine (Ollama,
-      # LM Studio, vLLM). Required on Linux; Docker Desktop provides it natively.
-      - "host.docker.internal:host-gateway"
-
+    depends_on: {postgres: {condition: service_healthy}}
+    ports: ["${GATEWAY_HTTP_PORT:-8080}:8080","${GATEWAY_GRPC_PORT:-9090}:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     environment:
-      # Connects as chora_app, NOT as the chora superuser. This is load-bearing:
-      # PostgreSQL exempts superusers from row-level security entirely, so an
-      # app connecting as `chora` would bypass the tenant isolation that
-      # 0001_initial.sql enables and every tenant's budget would be visible in
-      # one query. See migrations/0002_app_role.sql.
       CHORA_DATABASE_URL: postgres://chora_app:chora_app@postgres:5432/chora_observability?sslmode=disable
-      CHORA_MODEL_REGISTRY: /etc/chora/models.yaml
-      CHORA_GRPC_PORT: "9090"
+      CHORA_MODEL_REGISTRY: /app/config/models.yaml
       CHORA_HTTP_PORT: "8080"
-      CHORA_BOOTSTRAP_TIMEOUT: "60s"
-      # Generous: a local model on CPU can take a long time to first token, and a
-      # multi-step grounded run makes several provider round trips.
-      CHORA_VENDOR_HTTP_TIMEOUT: "300s"
+      CHORA_GRPC_PORT: "9090"
       CHORA_DEFAULT_TENANT_ID: ${CHORA_DEFAULT_TENANT_ID:-00000000-0000-7000-8000-000000000001}
       CHORA_DEFAULT_GCID: ${CHORA_DEFAULT_GCID:-00000000-0000-7000-8000-000000000002}
-      SERVICE_VERSION: ${SERVICE_VERSION:-chora-model-gateway:local}
-
-      # Credentials. A registry entry whose api_key_env is set but whose value
-      # is empty is REFUSED at request time with an explicit error, rather than
-      # sending an unauthenticated request that a public endpoint would happily
-      # serve.
+      TEXT_LLM_BASE_URL: ${TEXT_LLM_BASE_URL:-}
+      TEXT_LLM_FORMAT: ${TEXT_LLM_FORMAT:-responses}
+      TEXT_LLM_MODEL: ${TEXT_LLM_MODEL:-}
+      TEXT_LLM_API_KEY: ${TEXT_LLM_API_KEY:-}
+      TEXT_LLM_SUPPORT_GROUNDING: ${TEXT_LLM_SUPPORT_GROUNDING:-false}
+      IMAGE_LLM_BASE_URL: ${IMAGE_LLM_BASE_URL:-}
+      IMAGE_LLM_FORMAT: ${IMAGE_LLM_FORMAT:-images}
+      IMAGE_LLM_MODEL: ${IMAGE_LLM_MODEL:-}
+      IMAGE_LLM_API_KEY: ${IMAGE_LLM_API_KEY:-}
+      EMBEDDING_LLM_BASE_URL: ${EMBEDDING_LLM_BASE_URL:-}
+      EMBEDDING_LLM_FORMAT: ${EMBEDDING_LLM_FORMAT:-embeddings}
+      EMBEDDING_LLM_MODEL: ${EMBEDDING_LLM_MODEL:-}
+      EMBEDDING_LLM_API_KEY: ${EMBEDDING_LLM_API_KEY:-}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-exa}
+      EXA_API_KEY: ${EXA_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
-      # Meta's api.meta.ai: muse-spark (text + hosted web search) and muse-image.
       META_API_KEY: ${META_API_KEY:-}
-      # Only used by the `stub` smoke-test registry entries.
-      STUB_API_KEY: ${STUB_API_KEY:-}
-
-    volumes:
-      # The catalogue is read-only and mounted rather than baked, so editing
-      # models.yaml is a `docker compose restart gateway`, not a rebuild.
-      - ./config/models.yaml:/etc/chora/models.yaml:ro
-
-    # The runtime image is distroless, so there is no shell or curl for a
-    # healthcheck to call. The binary answers `-healthcheck` itself.
-    healthcheck:
-      test: ["CMD", "/service", "-healthcheck"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-    security_opt:
-      - no-new-privileges:true
-
-    stop_grace_period: 45s
-
-volumes:
-  pgdata:
+    volumes: ["./config/models.yaml:/app/config/models.yaml:ro"]
+volumes: {pgdata: {}}
