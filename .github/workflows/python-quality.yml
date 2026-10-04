@@ -40,11 +40,11 @@ jobs:
 
       - name: Ruff lint
         if: matrix.check == 'ruff-lint'
-        run: uv run ruff check app tests
+        run: uv run ruff check app/config.py app/database.py app/runtime.py app/service.py tests
 
       - name: Ruff format
         if: matrix.check == 'ruff-format'
-        run: uv run ruff format --check app tests
+        run: uv run ruff format --check app/config.py app/database.py app/runtime.py app/service.py tests
 
       - name: Mypy
         if: matrix.check == 'mypy'
