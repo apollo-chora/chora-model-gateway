@@ -1,0 +1,59 @@
+name: Python quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [ruff-lint, ruff-format, mypy, bandit, pytest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Ruff lint
+        if: matrix.check == 'ruff-lint'
+        run: uv run ruff check app tests
+
+      - name: Ruff format
+        if: matrix.check == 'ruff-format'
+        run: uv run ruff format --check app tests
+
+      - name: Mypy
+        if: matrix.check == 'mypy'
+        run: uv run mypy
+
+      - name: Bandit
+        if: matrix.check == 'bandit'
+        run: uv run bandit -c pyproject.toml -r app
+
+      - name: Pytest
+        if: matrix.check == 'pytest'
+        run: uv run pytest --cov=app --cov-report=term-missing
