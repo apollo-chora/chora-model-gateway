@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.compat import embedding_inputs, flatten_responses_input, generation_params, model_entry, wants_grounding
+from app.compat import (
+    embedding_inputs,
+    flatten_responses_input,
+    generation_params,
+    model_entry,
+    wants_grounding,
+)
 
 def spec(**kw):
     d = {"id": "logical", "format": "chat_completions", "model": "upstream", "base_url": "https://example.test/v1", "capabilities": ["chat", "tools"], "context_window": 8192, "max_output_tokens": 2048}
@@ -30,5 +36,6 @@ def test_responses_input_validation():
 def test_embedding_input_validation():
     assert embedding_inputs("x") == ["x"]
     assert embedding_inputs(["x", "y"]) == ["x", "y"]
-    for bad in ("",[],["x",""],[1,2]):
-        with pytest.raises(ValueError):embedding_inputs(bad)
+    for bad in ("", [], ["x", ""], [1, 2]):
+        with pytest.raises(ValueError):
+            embedding_inputs(bad)
