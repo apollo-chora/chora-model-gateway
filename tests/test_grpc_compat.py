@@ -7,7 +7,7 @@ from grpc.aio import AioRpcError
 import model_gateway_service_pb2 as pb
 import model_gateway_service_pb2_grpc as pbg
 from app.grpc_server import start_grpc
-from tests.conftest import make_gateway, make_models
+from tests.conftest import FakeDB, make_gateway, make_models
 
 
 @pytest.fixture
@@ -305,6 +305,70 @@ async def test_invoke_unknown_model_is_unavailable(grpc_channel):
     with pytest.raises(AioRpcError) as exc_info:
         await call(grpc_channel, tenant_id="t", gcid="g", agent_id="a", logical_model_id="ghost", prompt="hi")
     assert exc_info.value.code() == grpc.StatusCode.UNAVAILABLE
+
+
+class _FailingDB(FakeDB):
+    def __init__(self, fail_claim=False, fail_budget=False):
+        super().__init__()
+        self._fail_claim = fail_claim
+        self._fail_budget = fail_budget
+
+    async def claim(self, gcid, key, action):
+        if self._fail_claim:
+            raise RuntimeError("db down")
+        return await super().claim(gcid, key, action)
+
+    async def budget(self, tenant_id):
+        if self._fail_budget:
+            raise RuntimeError("db down")
+        return await super().budget(tenant_id)
+
+
+@pytest.mark.anyio
+async def test_invoke_claim_db_failure_is_unavailable(models, provider):
+    gateway = make_gateway(models, _FailingDB(fail_claim=True), provider)
+    server, port = await start_grpc(gateway, 0)
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    stub = pbg.ModelGatewayServiceStub(channel)
+    try:
+        with pytest.raises(AioRpcError) as exc_info:
+            await stub.Invoke(
+                pb.InvokeRequest(
+                    tenant_id="t",
+                    gcid="g",
+                    agent_id="a",
+                    logical_model_id="chatty",
+                    prompt="hi",
+                    dispatch_idempotency_key="k",
+                )
+            )
+        assert exc_info.value.code() == grpc.StatusCode.UNAVAILABLE
+    finally:
+        await channel.close()
+        await server.stop(5)
+
+
+@pytest.mark.anyio
+async def test_invoke_budget_db_failure_is_unavailable(models, provider):
+    gateway = make_gateway(models, _FailingDB(fail_budget=True), provider)
+    server, port = await start_grpc(gateway, 0)
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    stub = pbg.ModelGatewayServiceStub(channel)
+    try:
+        with pytest.raises(AioRpcError) as exc_info:
+            await stub.Invoke(
+                pb.InvokeRequest(
+                    tenant_id="t",
+                    gcid="g",
+                    agent_id="a",
+                    logical_model_id="chatty",
+                    prompt="hi",
+                )
+            )
+        assert exc_info.value.code() == grpc.StatusCode.UNAVAILABLE
+    finally:
+        await channel.close()
+        await server.stop(5)
 
 
 # ---------------------------------------------------------------------------

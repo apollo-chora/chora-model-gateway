@@ -202,11 +202,17 @@ class Gateway:
         deduped = False
         dispatch_key = request.get("dispatch_idempotency_key") or ""
         if dispatch_key:
-            claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code") or agent)
+            try:
+                claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code") or agent)
+            except Exception as exc:
+                raise GatewayError(502, "vendor_error", f"idempotency claim failed: {exc}", inner=exc) from exc
             deduped = not claimed
 
         # Step 5 — load the tenant budget.
-        budget = await self.db.budget(tenant)
+        try:
+            budget = await self.db.budget(tenant)
+        except Exception as exc:
+            raise GatewayError(502, "vendor_error", f"budget repo unavailable: {exc}", inner=exc) from exc
 
         # Step 6 — decide the budget action. An unrecognised policy fails safe:
         # refuse rather than allow.
@@ -233,7 +239,7 @@ class Gateway:
         action_code = request.get("action_code") or agent
         if modality == "IMAGE":
             action_code = request.get("action_code") or f"{self.settings.default_agent_id}_image"
-        params = self._apply_output_ceiling(dict(request.get("params") or {}), spec.max_output_tokens)
+        raw_params = dict(request.get("params") or {})
         grounded = modality == "GROUNDED"
         traceparent = request.get("traceparent") or ""
         tracestate = request.get("tracestate") or ""
@@ -246,6 +252,9 @@ class Gateway:
 
         for candidate in [spec, *chain]:
             tried.append(f"{candidate.vendor}:{candidate.model}")
+            # The output ceiling is per-target: a fallback to a model with a
+            # lower ceiling must re-clamp, matching the Go dispatch loop.
+            params = self._apply_output_ceiling(raw_params, candidate.max_output_tokens)
             if candidate.api_key_env and not candidate.api_key:
                 raise GatewayError(
                     500,
@@ -295,8 +304,10 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001 — the chain walks on any failure
                 last_error = exc
                 status_getter = getattr(exc, "upstream_status", None)
-                if callable(status_getter):
-                    upstream_status = status_getter()
+                # The final error reflects the LAST target's status: a fallback
+                # that fails without an upstream status yields 502 even when an
+                # earlier target carried one.
+                upstream_status = status_getter() if callable(status_getter) else None
 
         if result is None or used is None:
             detail = f"all targets exhausted: {last_error}" if last_error else "all targets exhausted"

@@ -260,6 +260,56 @@ async def test_unknown_registry_fallback_fails_at_boot():
         os.unlink(path)
 
 
+def _registry_with_path(path_value):
+    import tempfile
+
+    import yaml
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+        yaml.safe_dump(
+            {
+                "models": [
+                    {
+                        "id": "a",
+                        "provider": "openai",
+                        "base_url": "https://x.test/v1",
+                        "chat_completions_path": path_value,
+                    },
+                ]
+            },
+            handle,
+        )
+        return handle.name
+
+
+@pytest.mark.parametrize("bad_path", ["//host/path", "ftp://x.test/v1", "grpc://x.test"])
+def test_registry_rejects_invalid_endpoint_overrides_at_boot(bad_path):
+    from app.config import ConfigError, load_models
+
+    path = _registry_with_path(bad_path)
+    try:
+        with pytest.raises(ConfigError):
+            load_models(path)
+    finally:
+        import os
+
+        os.unlink(path)
+
+
+@pytest.mark.parametrize("good_path", ["/custom/chat", "https://x.test/v1/custom/chat"])
+def test_registry_accepts_valid_endpoint_overrides(good_path):
+    from app.config import load_models
+
+    path = _registry_with_path(good_path)
+    try:
+        models = load_models(path)
+        assert models["a"].chat_completions_path == good_path
+    finally:
+        import os
+
+        os.unlink(path)
+
+
 @pytest.mark.anyio
 async def test_fallback_can_cross_provider_boundaries(models, db, provider):
     models["chatty"] = make_spec(fallback_ids=["claude-searcher"])
@@ -482,3 +532,109 @@ async def test_custom_messages_path_is_used_for_anthropic(models, db, provider):
     assert response.text == "hi"
     path, _, _, url = provider.last
     assert path == "/v1/custom/messages"
+
+
+# ---------------------------------------------------------------------------
+# Error paths (found in the ChatGPT review)
+# ---------------------------------------------------------------------------
+
+
+class _DBErrorDB(FakeDB):
+    """A FakeDB whose claim() or budget() raises, to exercise the wrapping."""
+
+    def __init__(self, fail_claim=False, fail_budget=False):
+        super().__init__()
+        self._fail_claim = fail_claim
+        self._fail_budget = fail_budget
+
+    async def claim(self, gcid, key, action):
+        if self._fail_claim:
+            raise RuntimeError("db down")
+        return await super().claim(gcid, key, action)
+
+    async def budget(self, tenant_id):
+        if self._fail_budget:
+            raise RuntimeError("db down")
+        return await super().budget(tenant_id)
+
+
+@pytest.mark.anyio
+async def test_claim_db_failure_is_a_vendor_error(models, provider):
+    gateway = make_gateway(models, _DBErrorDB(fail_claim=True), provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, _DBErrorDB(fail_claim=True), dispatch_idempotency_key="k")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "vendor_error"
+
+
+@pytest.mark.anyio
+async def test_budget_db_failure_is_a_vendor_error(models, provider):
+    gateway = make_gateway(models, _DBErrorDB(fail_budget=True), provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, _DBErrorDB(fail_budget=True))
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "vendor_error"
+
+
+@pytest.mark.anyio
+async def test_stale_upstream_status_does_not_misclassify_exhausted_chain(models, db, provider):
+    # Primary returns 429, fallback fails with a connection error: the final
+    # error is the LAST target's (no upstream status), so it is a 502, not 429.
+    models["chatty"] = make_spec(base_url="https://api.example.test/v1")
+    models["textonly"] = make_spec(
+        id="textonly", model="textonly-upstream", base_url="https://fallback.example.test/v1"
+    )
+    provider.route("https://api.example.test/v1/chat/completions", {"error": "rate limited"}, status=429)
+    provider.fail_with["https://fallback.example.test/v1/chat/completions"] = ConnectionError("unreachable")
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, fallback_ids=["textonly"])
+    assert exc_info.value.status == 502
+    assert exc_info.value.upstream_status is None
+
+
+@pytest.mark.anyio
+async def test_last_target_upstream_status_wins(models, db, provider):
+    # Primary fails with a connection error, fallback returns 429: the final
+    # error relays the LAST target's upstream status.
+    models["chatty"] = make_spec(base_url="https://api.example.test/v1")
+    models["textonly"] = make_spec(
+        id="textonly", model="textonly-upstream", base_url="https://fallback.example.test/v1"
+    )
+    provider.fail_with["https://api.example.test/v1/chat/completions"] = ConnectionError("unreachable")
+    provider.route("https://fallback.example.test/v1/chat/completions", {"error": "rate limited"}, status=429)
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, fallback_ids=["textonly"])
+    # The chain-exhausted error is a vendor error (502); the facade relays the
+    # last target's upstream status (429) to the caller.
+    assert exc_info.value.status == 502
+    assert exc_info.value.upstream_status == 429
+
+
+@pytest.mark.anyio
+async def test_output_ceiling_reapplies_per_fallback_target(models, db, provider):
+    # The primary has a high ceiling and fails; the fallback has a low ceiling
+    # and must re-clamp the caller's max_tokens to its own ceiling.
+    models["chatty"] = make_spec(max_output_tokens=8192, base_url="https://api.example.test/v1")
+    models["textonly"] = make_spec(
+        id="textonly",
+        model="textonly-upstream",
+        max_output_tokens=1024,
+        base_url="https://fallback.example.test/v1",
+    )
+    provider.route("https://api.example.test/v1/chat/completions", {"error": "down"}, status=503)
+    provider.route(
+        "https://fallback.example.test/v1/chat/completions",
+        {
+            "id": "c",
+            "model": "textonly-upstream",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+    gateway = make_gateway(models, db, provider)
+    response = await invoke(gateway, db, params={"max_tokens": 6000}, fallback_ids=["textonly"])
+    assert response.text == "ok"
+    _, payload, _, _ = provider.last
+    assert payload["max_tokens"] == 1024

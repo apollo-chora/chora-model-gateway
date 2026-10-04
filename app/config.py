@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -145,6 +146,26 @@ def _env(prefix: str, kind: str, default_format: str) -> ModelSpec | None:
     return spec
 
 
+def _validate_endpoint(field: str, path: str) -> None:
+    """Boot-time endpoint validation, mirroring the old gateway: a custom
+    path is either relative (joined onto base_url) or a valid absolute
+    http(s) URL. A scheme-less //host/path or a non-http override is a
+    configuration typo and must fail at boot, not at dispatch."""
+    path = path.strip()
+    if not path:
+        return
+    if "://" in path:
+        lower = path.lower()
+        if not lower.startswith("http://") and not lower.startswith("https://"):
+            raise ConfigError(f"{field} {path!r} must be an http:// or https:// url to override base_url")
+        parsed = urlparse(path)
+        if not parsed.scheme or not parsed.netloc:
+            raise ConfigError(f"{field} {path!r} is not a valid absolute url")
+        return
+    if path.startswith("//"):
+        raise ConfigError(f"{field} {path!r} looks like a url but is missing its scheme")
+
+
 def _parse_grounding(row: dict[str, Any]) -> GroundingSpec:
     block = row.get("grounding")
     if block is None:
@@ -182,6 +203,8 @@ def load_models(path: str) -> dict[str, ModelSpec]:
             provider = str(row.get("provider", "")).lower()
             if provider not in ("openai", "anthropic"):
                 raise ConfigError(f"provider {provider!r} is not one of: openai, anthropic")
+            for field in ("chat_completions_path", "messages_path", "images_path", "embeddings_path"):
+                _validate_endpoint(field, str(row.get(field, "") or ""))
             if "image" in caps and "chat" not in caps:
                 kind = "image"
             elif "embeddings" in caps and "chat" not in caps:
