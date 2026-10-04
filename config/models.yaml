@@ -1,0 +1,328 @@
+# chora-model-gateway — model registry
+#
+# This file IS the catalogue. Adding a model is an edit here, not a code
+# change and not a rebuild. Every entry declares:
+#
+#   id                    the name callers pass as `model` (lowercased on load)
+#   provider              which adapter speaks to it: openai | anthropic
+#   upstream_model        the model name sent to the provider (defaults to id)
+#   base_url              the API root
+#   *_path                appended to base_url, or an ABSOLUTE url used verbatim
+#   api_key_env           the env var holding the credential (omit = no auth)
+#   context_window        total tokens (input + output)
+#   max_output_tokens     the generation ceiling; the gateway clamps callers to it
+#   capabilities          chat | tools | vision | image | embeddings
+#   pricing               USD micros per million tokens; 0 = unpriced
+#   fallback_ids          tried in order when this model fails
+#   aliases               extra names this entry answers to
+#   extra_headers         provider-specific headers sent on every dispatch
+#
+# ENDPOINT RESOLUTION — the two ways to point at a server:
+#
+#   1. base_url + a relative path (the usual case). The path is joined onto
+#      the base:
+#          base_url: https://api.openai.com/v1
+#          -> https://api.openai.com/v1/chat/completions
+#
+#   2. a fully custom endpoint. Put an absolute url in the path field and
+#      base_url is ignored for that surface:
+#          chat_completions_path: https://internal-llm.corp:8443/generate
+#          -> https://internal-llm.corp:8443/generate
+#
+# ---------------------------------------------------------------------------
+
+models:
+  # -------------------------------------------------------------------------
+  # OpenAI. The canonical hosted example.
+  # -------------------------------------------------------------------------
+  - id: gpt-4o
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision, embeddings]
+    pricing:
+      input_per_mtok_usd_micros: 2500000
+      output_per_mtok_usd_micros: 10000000
+
+  - id: gpt-4o-mini
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision]
+    pricing:
+      input_per_mtok_usd_micros: 150000
+      output_per_mtok_usd_micros: 600000
+
+  # A cheap model with an expensive one behind it: if the primary fails, the
+  # gateway retries against the fallback and records which one answered.
+  - id: chora-fast
+    provider: openai
+    upstream_model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools]
+    fallback_ids: [gpt-4o]
+    pricing:
+      input_per_mtok_usd_micros: 150000
+      output_per_mtok_usd_micros: 600000
+
+  # -------------------------------------------------------------------------
+  # Image generation.
+  # -------------------------------------------------------------------------
+  - id: gpt-image-1
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 0
+    max_output_tokens: 0
+    capabilities: [image]
+    # Images are priced per call, not per token, so the token table is zero.
+    # A per-call figure belongs in the operator's own accounting, not in a
+    # token-derived number that would silently record zero.
+    pricing: {}
+
+  # -------------------------------------------------------------------------
+  # Self-hosted. Both of these need NO credential, which is what
+  # `api_key_env` being absent expresses.
+  #
+  # host.docker.internal is how a containerised gateway reaches a server on
+  # the host machine (Ollama, LM Studio). On Linux it needs the extra_hosts
+  # mapping in docker-compose.yml, which is already there.
+  # -------------------------------------------------------------------------
+  - id: local-llama
+    provider: openai
+    upstream_model: llama3.1:8b
+    base_url: http://host.docker.internal:11434/v1
+    # context_window: 8192
+    context_window: 8192
+    max_output_tokens: 4096
+    capabilities: [chat, tools]
+    pricing: {}
+
+  - id: local-vllm
+    provider: openai
+    upstream_model: Qwen/Qwen2.5-7B-Instruct
+    base_url: http://host.docker.internal:8000/v1
+    context_window: 32768
+    max_output_tokens: 8192
+    capabilities: [chat, tools]
+    pricing: {}
+
+  # -------------------------------------------------------------------------
+  # A FULLY CUSTOM chat-completions endpoint: a server that does not expose
+  # OpenAI's standard path layout. base_url is ignored for this surface
+  # because chat_completions_path is absolute.
+  # -------------------------------------------------------------------------
+  - id: internal-llm
+    provider: openai
+    upstream_model: chora-sg-academic
+    base_url: https://llm.internal.example.com/v1
+    chat_completions_path: https://llm.internal.example.com/generate
+    api_key_env: INTERNAL_LLM_KEY
+    context_window: 8192
+    max_output_tokens: 2048
+    capabilities: [chat]
+    pricing: {}
+
+  # -------------------------------------------------------------------------
+  # Anthropic. Note there is no image entry: the messages API has no image
+  # surface, so advertising `image` here would be a promise the adapter
+  # cannot keep.
+  # -------------------------------------------------------------------------
+  - id: claude-sonnet-5
+    provider: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    context_window: 200000
+    max_output_tokens: 8192
+    capabilities: [chat, tools, vision]
+    pricing:
+      input_per_mtok_usd_micros: 3000000
+      output_per_mtok_usd_micros: 15000000
+
+  # -------------------------------------------------------------------------
+  # SMOKE-TEST ENTRY — points at the local stub, not a real provider.
+  # Left in the file deliberately: it lets `docker compose up` be verified
+  # end-to-end (HTTP → domain → vendor → ledger → Postgres) with no
+  # credentials at all. It is the only entry that needs no network egress.
+  # -------------------------------------------------------------------------
+  - id: stub
+    provider: openai
+    upstream_model: stub-model-v1
+    base_url: http://host.docker.internal:11434/v1
+    context_window: 4096
+    max_output_tokens: 256
+    capabilities: [chat, tools, image, embeddings]
+    # Priced like a real model so the cost path is actually exercised: at
+    # $15/$60 per Mtok an 11-token call records ~165 micro-USD, which is
+    # visible. A near-zero price truncates to 0 in micro-USD and would make a
+    # working cost calculation look broken.
+    pricing:
+      input_per_mtok_usd_micros: 15000000
+      output_per_mtok_usd_micros: 60000000
+
+  # Same stub, but groundable, so the /v1/responses path is exercisable with no
+  # credentials at all.
+  - id: stub-grounded
+    provider: openai
+    upstream_model: stub-model-v1
+    base_url: http://host.docker.internal:11434/v1
+    context_window: 4096
+    max_output_tokens: 256
+    capabilities: [chat, web_search]
+    grounding:
+      surface: responses
+      tool_type: web_search
+    pricing:
+      input_per_mtok_usd_micros: 15000000
+      output_per_mtok_usd_micros: 60000000
+
+  - id: stub-authed
+    provider: openai
+    upstream_model: stub-model-v1
+    base_url: http://host.docker.internal:11434/v1
+    api_key_env: STUB_API_KEY
+    context_window: 4096
+    max_output_tokens: 256
+    capabilities: [chat]
+    pricing: {}
+
+  # -------------------------------------------------------------------------
+  # GROUNDED MODELS — hosted web search.
+  #
+  # Grounding is OPTIONAL and per-entry. A model without a `grounding:` block
+  # refuses a grounded request rather than silently running an ungrounded call
+  # that would only LOOK researched.
+  #
+  # There is no single "web search" wire format, so the block says which of the
+  # three shapes this provider speaks. With the block omitted entirely, the
+  # defaults follow the provider family:
+  #
+  #   openai     -> surface: responses,  tool: {"type":"web_search"}
+  #   anthropic  -> surface: messages,   tool: {"type":"web_search_20250305",
+  #                                             "name":"web_search"}
+  #
+  # so the shortest useful declaration is just the capability plus an empty
+  # block — as below.
+  # -------------------------------------------------------------------------
+
+  # OpenAI: the canonical hosted search. Grounds on /v1/responses.
+  - id: gpt-4o-search
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision, web_search]
+    grounding:
+      # Optional: these are the defaults for an `openai` provider.
+      surface: responses
+      tool_type: web_search
+      # Provider tool options the gateway does not model, merged verbatim.
+      # OpenAI supports domain filters and a user location here.
+      # extra_tool_fields:
+      #   search_context_size: medium
+      #   user_location:
+      #     type: approximate
+      #     country: SG
+      pricing:
+      input_per_mtok_usd_micros: 2500000
+      output_per_mtok_usd_micros: 10000000
+      # Search calls are billed per request, not per token, so a flat token
+      # table under-reports a search-heavy workload. Price it yourself or
+      # accept the token figure as a floor.
+
+  # Meta's api.meta.ai - an OpenAI-compatible aggregator that also serves hosted
+  # web search on /v1/responses. Probed live 2026-10-04: /v1/models returns
+  # sam-3.1, muse-spark-1.1/1.2/1.3 (+ -contributor variants),
+  # muse-voice-transcribe-1.0 and muse-image-1.0.
+  #
+  # The muse-spark models are REASONING models: a 16-token request came back with
+  # 13 reasoning tokens, content:null and finish_reason "length". An output
+  # ceiling is therefore load-bearing here - set it low and every call returns
+  # an empty answer.
+  - id: muse-spark
+    provider: openai
+    upstream_model: muse-spark-1.3
+    base_url: https://api.meta.ai/v1
+    api_key_env: META_API_KEY
+    # Context length is not published; set generously enough that reasoning plus
+    # the answer fit.
+    context_window: 128000
+    max_output_tokens: 4096
+    capabilities: [chat, tools, web_search]
+    grounding:
+      surface: responses
+      tool_type: web_search
+      responses_path: /responses
+    # Probed: a multi-step grounded run needs a large ceiling. 1500 tokens was
+    # NOT enough for a population question (three searches + two page opens);
+    # 4000 completed.
+    #
+    # Left unpriced rather than guessed. Set your own rates, or accept that the
+    # ledger records the usage and debits zero.
+    pricing: {}
+
+  # A cheaper sibling, useful when you want a short answer without paying for a
+  # long chain of thought.
+  - id: muse-spark-1.1
+    provider: openai
+    upstream_model: muse-spark-1.1
+    base_url: https://api.meta.ai/v1
+    api_key_env: META_API_KEY
+    context_window: 128000
+    max_output_tokens: 2048
+    capabilities: [chat]
+    pricing: {}
+
+  # Image generation. Confirmed live: POST /v1/images/generations returns
+  # data[0].b64_json.
+  - id: muse-image
+    provider: openai
+    upstream_model: muse-image-1.0
+    base_url: https://api.meta.ai/v1
+    api_key_env: META_API_KEY
+    capabilities: [image]
+    images_path: /images/generations
+    pricing: {}
+
+  # Anthropic: a SERVER tool on /v1/messages. `max_uses` matters because
+  # Anthropic prices web search PER SEARCH, so an unbounded tool is unbounded
+  # spend on a single request.
+  - id: claude-sonnet-5-search
+    provider: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    context_window: 200000
+    max_output_tokens: 8192
+    capabilities: [chat, tools, vision, web_search]
+    grounding:
+      surface: messages
+      tool_type: web_search_20250305
+      tool_name: web_search
+      max_uses: 5
+      # Anthropic's own domain filtering, if you want it.
+      # extra_tool_fields:
+      #   allowed_domains: ["example.com"]
+
+  # A local/self-hosted server that speaks the chat-completions shape with a
+  # search tool attached. Declares the chat_completions surface so a caller may
+  # ground from /v1/chat/completions instead of /v1/responses.
+  - id: local-search
+    provider: openai
+    upstream_model: qwen2.5:14b
+    base_url: http://host.docker.internal:11434/v1
+    context_window: 32768
+    max_output_tokens: 4096
+    capabilities: [chat, web_search]
+    grounding:
+      surface: chat_completions
+      tool_type: web_search
+      responses_path: /responses
+    pricing: {}

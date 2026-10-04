@@ -1,0 +1,5 @@
+# Local credentials. .env.example is the committed template; .env is not.
+/.env
+
+# Build output
+/out/

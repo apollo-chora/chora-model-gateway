@@ -1,0 +1,6 @@
+# Never bake these into an image layer.
+.env
+.git
+.gitignore
+/coverage*
+/out
