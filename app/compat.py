@@ -3,16 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 
-def vendor_name(spec: Any) -> str:
-    return "anthropic" if spec.format == "messages" else "openai"
-
-
 def model_entry(spec: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": spec.id,
         "object": "model",
         "created": 0,
-        "owned_by": vendor_name(spec),
+        "owned_by": spec.vendor,
     }
     if spec.context_window:
         out["context_window"] = spec.context_window
@@ -26,10 +22,8 @@ def model_entry(spec: Any) -> dict[str, Any]:
 
 
 def generation_params(body: dict[str, Any]) -> dict[str, Any]:
-    out = {
-        key: body[key]
-        for key in ("temperature", "top_p", "stop", "n", "seed")
-        if key in body and body[key] is not None
+    out: dict[str, Any] = {
+        key: body[key] for key in ("temperature", "top_p", "stop", "n", "seed") if key in body and body[key] is not None
     }
     maximum = body.get("max_tokens")
     if maximum is None:

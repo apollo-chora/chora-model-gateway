@@ -1,0 +1,427 @@
+from __future__ import annotations
+
+import pytest
+
+from app.service import BudgetBlock, GatewayError
+from tests.conftest import FakeDB, make_gateway, make_spec
+
+
+def budget_state(policy="block", spent=200, ceiling=100, downgrade_to=None):
+    return {
+        "budget_usd_micros": ceiling,
+        "spent_usd_micros": spent,
+        "policy": policy,
+        "downgrade_to_logical_model_id": downgrade_to,
+    }
+
+
+async def invoke(gateway, db, **overrides):
+    request = {
+        "tenant_id": "00000000-0000-7000-8000-000000000001",
+        "gcid": "00000000-0000-7000-8000-000000000002",
+        "agent_id": "openai_compat",
+        "model": "chatty",
+        "prompt": "hi",
+        "modality": "TEXT",
+    }
+    request.update(overrides)
+    return await gateway.invoke(request)
+
+
+# ---------------------------------------------------------------------------
+# Budget
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_no_budget_row_allows(models, db, provider):
+    db.budget_state = None
+    response = await invoke(make_gateway(models, db, provider), db)
+    assert response.text == "hello from the stub"
+
+
+@pytest.mark.anyio
+async def test_budget_under_the_ceiling_allows(models, db, provider):
+    db.budget_state = budget_state(spent=50, ceiling=100)
+    response = await invoke(make_gateway(models, db, provider), db)
+    assert response.text == "hello from the stub"
+
+
+@pytest.mark.anyio
+async def test_budget_block_refuses_before_dispatch(models, db, provider):
+    db.budget_state = budget_state(policy="block", spent=200, ceiling=100)
+    with pytest.raises(BudgetBlock):
+        await invoke(make_gateway(models, db, provider), db)
+    assert provider.requests == []
+    assert db.ledger == []
+
+
+@pytest.mark.anyio
+async def test_budget_block_at_exact_ceiling(models, db, provider):
+    db.budget_state = budget_state(policy="block", spent=100, ceiling=100)
+    with pytest.raises(BudgetBlock):
+        await invoke(make_gateway(models, db, provider), db)
+
+
+@pytest.mark.anyio
+async def test_budget_zero_ceiling_is_exhausted(models, db, provider):
+    db.budget_state = budget_state(policy="block", spent=0, ceiling=0)
+    with pytest.raises(BudgetBlock):
+        await invoke(make_gateway(models, db, provider), db)
+
+
+@pytest.mark.anyio
+async def test_budget_unknown_policy_fails_safe(models, db, provider):
+    # An unrecognised policy must refuse rather than allow.
+    db.budget_state = budget_state(policy="something-new", spent=200, ceiling=100)
+    with pytest.raises(BudgetBlock):
+        await invoke(make_gateway(models, db, provider), db)
+
+
+@pytest.mark.anyio
+async def test_budget_empty_policy_fails_safe(models, db, provider):
+    db.budget_state = budget_state(policy="", spent=200, ceiling=100)
+    with pytest.raises(BudgetBlock):
+        await invoke(make_gateway(models, db, provider), db)
+
+
+@pytest.mark.anyio
+async def test_budget_alert_proceeds(models, db, provider):
+    db.budget_state = budget_state(policy="alert", spent=200, ceiling=100)
+    response = await invoke(make_gateway(models, db, provider), db)
+    assert response.text == "hello from the stub"
+
+
+@pytest.mark.anyio
+async def test_budget_downgrade_reresolves_the_target(models, db, provider):
+    db.budget_state = budget_state(policy="downgrade", spent=200, ceiling=100, downgrade_to="textonly")
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    # The downgrade target was dispatched: the wire carried textonly's model.
+    _, payload, _, _ = provider.last
+    assert payload["model"] == "textonly-upstream"
+
+
+@pytest.mark.anyio
+async def test_budget_downgrade_to_unknown_model_is_a_config_error(models, db, provider):
+    db.budget_state = budget_state(policy="downgrade", spent=200, ceiling=100, downgrade_to="model-typo")
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(make_gateway(models, db, provider), db)
+    assert exc_info.value.status == 500
+    assert exc_info.value.code == "gateway_misconfigured"
+
+
+# ---------------------------------------------------------------------------
+# Cost
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_cost_uses_term_wise_floor_division(models, db, provider):
+    spec = make_spec(
+        pricing={
+            "input_per_mtok_usd_micros": 1_000_000,
+            "output_per_mtok_usd_micros": 2_000_000,
+            "cached_per_mtok_usd_micros": 100_000,
+        }
+    )
+    # 1000 in (500 cached) + 2000 out at $1/$2/$0.10 per Mtok.
+    assert spec.cost_micros(1000 - 500, 2000, 500) == 500 + 4000 + 50
+
+
+@pytest.mark.anyio
+async def test_cost_cached_tokens_are_not_double_counted(models):
+    spec = make_spec(
+        pricing={
+            "input_per_mtok_usd_micros": 1_000_000,
+            "cached_per_mtok_usd_micros": 0,
+        }
+    )
+    assert spec.cost_micros(0, 0, 1000) == 0
+    # A nonsensical cached > input must not produce a negative debit.
+    assert spec.cost_micros(0, 0, 500) == 0
+
+
+@pytest.mark.anyio
+async def test_cost_unpriced_model_is_zero(models):
+    spec = make_spec(pricing={})
+    assert spec.cost_micros(1000, 2000, 500) == 0
+
+
+@pytest.mark.anyio
+async def test_cost_ledger_carries_the_real_cost_when_deduped(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, dispatch_idempotency_key="k1")
+    await invoke(gateway, db, dispatch_idempotency_key="k1")
+    first, second = db.ledger
+    assert first["debit_deduped"] is False
+    assert second["debit_deduped"] is True
+    assert first["cost_usd_micros"] == second["cost_usd_micros"] > 0
+    # Only the first call moved the budget.
+    assert db.settle_calls[0][1] == first["cost_usd_micros"]
+    assert db.settle_calls[1][1] == 0
+
+
+# ---------------------------------------------------------------------------
+# Idempotency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_duplicate_dispatch_key_does_not_debit_twice(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, dispatch_idempotency_key="dup")
+    await invoke(gateway, db, dispatch_idempotency_key="dup")
+    assert len(db.ledger) == 2
+    assert db.settle_calls[0][1] > 0
+    assert db.settle_calls[1][1] == 0
+
+
+@pytest.mark.anyio
+async def test_claim_key_includes_the_action_code(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, dispatch_idempotency_key="k", action_code="alice")
+    await invoke(gateway, db, dispatch_idempotency_key="k", action_code="bob")
+    # Different action codes are different claims: both debit.
+    assert db.settle_calls[0][1] > 0
+    assert db.settle_calls[1][1] > 0
+
+
+@pytest.mark.anyio
+async def test_no_dispatch_key_means_no_claim(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    await invoke(gateway, db)
+    # Without a key a plain retried call debits again.
+    assert db.settle_calls[0][1] > 0
+    assert db.settle_calls[1][1] > 0
+
+
+# ---------------------------------------------------------------------------
+# Fallbacks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_caller_fallbacks_come_before_registry_fallbacks(models, db, provider):
+    models["chatty"] = make_spec(fallback_ids=["textonly"])
+    models["textonly"] = make_spec(
+        id="textonly", model="textonly-upstream", base_url="https://fallback.example.test/v1"
+    )
+    gateway = make_gateway(models, db, provider)
+    provider.route("https://api.example.test/v1/chat/completions", {"error": "down"}, status=503)
+    provider.route(
+        "https://fallback.example.test/v1/chat/completions",
+        {
+            "id": "chat-fb",
+            "model": "textonly-upstream",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "from the fallback"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    )
+    response = await invoke(gateway, db, fallback_ids=["textonly"])
+    assert response.fallback_chain == ["openai:chatty-upstream", "openai:textonly-upstream"]
+
+
+@pytest.mark.anyio
+async def test_unknown_caller_fallback_fails_the_resolve(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, fallback_ids=["ghost"])
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "vendor_error"
+
+
+@pytest.mark.anyio
+async def test_unknown_registry_fallback_fails_at_boot():
+    import os
+    import tempfile
+
+    import yaml
+
+    from app.config import ConfigError, load_models
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+        yaml.safe_dump(
+            {
+                "models": [
+                    {"id": "a", "provider": "openai", "base_url": "https://x.test/v1", "fallback_ids": ["missing"]},
+                ]
+            },
+            handle,
+        )
+        path = handle.name
+    try:
+        with pytest.raises(ConfigError):
+            load_models(path)
+    finally:
+        os.unlink(path)
+
+
+@pytest.mark.anyio
+async def test_fallback_can_cross_provider_boundaries(models, db, provider):
+    models["chatty"] = make_spec(fallback_ids=["claude-searcher"])
+    gateway = make_gateway(models, db, provider)
+    provider.route("https://api.example.test/v1/chat/completions", {"error": "down"}, status=503)
+    provider.route(
+        "https://api.example.test/v1/messages",
+        {
+            "id": "m",
+            "model": "claude-upstream",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "from anthropic"}],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        },
+    )
+    response = await invoke(gateway, db)
+    assert response.text == "from anthropic"
+    assert response.vendor == "anthropic"
+    assert response.fallback_chain == ["openai:chatty-upstream", "anthropic:claude-upstream"]
+
+
+# ---------------------------------------------------------------------------
+# Capabilities and validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_image_request_to_non_image_model_is_refused(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, modality="IMAGE")
+    assert exc_info.value.status == 500
+    assert exc_info.value.code == "gateway_misconfigured"
+    assert "image" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_grounded_request_to_non_grounded_model_is_refused(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, model="plain", modality="GROUNDED")
+    assert exc_info.value.status == 500
+    assert "web_search" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_grounded_request_without_a_grounding_block_is_refused(models, db, provider):
+    models["nocaps"] = make_spec(id="nocaps", model="nocaps-upstream", capabilities=["chat", "web_search"])
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, model="nocaps", modality="GROUNDED")
+    assert exc_info.value.status == 500
+    assert "grounding" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_empty_request_is_refused(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db, prompt="")
+    assert exc_info.value.status == 502
+
+
+@pytest.mark.anyio
+async def test_missing_tenant_is_refused(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError):
+        await invoke(gateway, db, tenant_id="")
+
+
+@pytest.mark.anyio
+async def test_bad_modality_is_refused(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError):
+        await invoke(gateway, db, modality="AUDIO")
+
+
+# ---------------------------------------------------------------------------
+# Output ceiling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_output_ceiling_clamps_max_tokens(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, params={"max_tokens": 9999})
+    _, payload, _, _ = provider.last
+    assert payload["max_tokens"] == 512  # the registry ceiling
+
+
+@pytest.mark.anyio
+async def test_output_ceiling_honours_a_smaller_request(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, params={"max_tokens": 100})
+    _, payload, _, _ = provider.last
+    assert payload["max_tokens"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Credentials
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_configured_but_empty_credential_is_a_misconfiguration(models, db, provider):
+    models["chatty"].api_key_env = "MISSING_KEY"
+    gateway = make_gateway(models, db, provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db)
+    assert exc_info.value.status == 500
+    assert exc_info.value.code == "gateway_misconfigured"
+    assert "MISSING_KEY" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_credential_travels_on_the_request(models, db, provider, monkeypatch):
+    monkeypatch.setenv("CHATTY_KEY", "sk-test")
+    models["chatty"].api_key_env = "CHATTY_KEY"
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    _, _, headers, _ = provider.last
+    assert headers["Authorization"] == "Bearer sk-test"
+
+
+@pytest.mark.anyio
+async def test_no_credential_ref_sends_no_auth_header(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    _, _, headers, _ = provider.last
+    assert "Authorization" not in headers
+
+
+# ---------------------------------------------------------------------------
+# Settle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_settle_failure_fails_the_call(models, db, provider):
+    class FailingDB(FakeDB):
+        async def settle(self, event, debit):
+            raise RuntimeError("deadlock detected")
+
+    gateway = make_gateway(models, FailingDB(), provider)
+    with pytest.raises(GatewayError) as exc_info:
+        await invoke(gateway, db)
+    assert exc_info.value.status == 502
+    assert "settle" in exc_info.value.message
+
+
+@pytest.mark.anyio
+async def test_ledger_row_carries_the_trace_context(models, db, provider):
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db, traceparent="00-abc", tracestate="foo=bar", surface="openai_compat")
+    event = db.ledger[0]
+    assert event["traceparent"] == "00-abc"
+    assert event["tracestate"] == "foo=bar"
+    assert event["gateway_version"] == "test"
+    assert event["surface"] == "openai_compat"
+    assert event["modality"] == "TEXT"

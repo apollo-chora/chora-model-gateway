@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import asyncpg
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 class Database:
@@ -28,6 +37,8 @@ class Database:
             return await connection.fetchval("SELECT 1") == 1
 
     async def budget(self, tenant_id: str) -> dict[str, Any] | None:
+        if not _is_uuid(tenant_id):
+            raise ValueError(f"invalid tenant_id {tenant_id!r} (must be a UUID)")
         async with self._pool().acquire() as connection, connection.transaction():
             await connection.execute(
                 "SELECT set_config('chora.tenant_id',$1,true)",
@@ -51,6 +62,10 @@ class Database:
     async def claim(self, gcid: str, key: str, action: str) -> bool:
         if not key:
             return True
+        if not gcid:
+            raise ValueError("gcid required")
+        if not _is_uuid(gcid):
+            raise ValueError(f"invalid gcid {gcid!r} (must be a UUID)")
 
         action = action or "unspecified"
         async with self._pool().acquire() as connection, connection.transaction():
@@ -82,13 +97,18 @@ class Database:
             )
             return False
 
-    async def settle(self, event: dict[str, Any], cost: int) -> None:
+    async def settle(self, event: dict[str, Any], debit: int) -> None:
+        """Write the budget debit and the ledger row in ONE transaction.
+
+        The ledger row always carries the real cost; `debit` is what moves on
+        the budget (zero for a deduped dispatch, whose provider call already
+        happened and was already paid)."""
         async with self._pool().acquire() as connection, connection.transaction():
             await connection.execute(
                 "SELECT set_config('chora.tenant_id',$1,true)",
                 event["tenant_id"],
             )
-            if cost > 0:
+            if debit > 0:
                 await connection.execute(
                     """
                     UPDATE per_tenant_llm_budget
@@ -98,7 +118,7 @@ class Database:
                        AND budget_period_end>now()
                     """,
                     event["tenant_id"],
-                    cost,
+                    debit,
                 )
 
             await connection.execute(
@@ -120,13 +140,13 @@ class Database:
                 event["input_tokens"],
                 event["output_tokens"],
                 event["cached_tokens"],
-                cost,
-                event.get("agent_role"),
+                event["cost_usd_micros"],
+                event.get("agent_role") or None,
                 event.get("surface") or "unspecified",
                 event.get("modality") or "TEXT",
                 json.dumps(event.get("fallback_chain", [])),
                 event.get("debit_deduped", False),
-                event.get("traceparent"),
-                event.get("tracestate"),
+                event.get("traceparent") or None,
+                event.get("tracestate") or None,
                 event.get("gateway_version"),
             )

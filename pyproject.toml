@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "anyio>=4.12.0",
     "bandit>=1.8.6",
     "grpcio-tools>=1.75.0",
     "mypy>=1.18.2",
@@ -53,8 +54,14 @@ no_implicit_optional = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["asyncpg.*", "blacksheep.*", "strands.*", "model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
+module = ["asyncpg.*", "blacksheep.*"]
 ignore_missing_imports = true
+
+# The protobuf stubs are generated at build time and their classes are
+# injected dynamically, so mypy cannot see them statically.
+[[tool.mypy.overrides]]
+module = ["model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
+follow_imports = "skip"
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
@@ -62,4 +69,5 @@ skips = ["B101"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-config --strict-markers"

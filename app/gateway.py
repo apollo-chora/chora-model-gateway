@@ -31,10 +31,8 @@ structlog.configure(
 async def start(_: Any) -> None:
     global grpc_server
     await db.start()
-    grpc_server = await start_grpc(gateway, settings.grpc_port)
-    structlog.get_logger().info(
-        "gateway_boot", models=len(models), version=settings.service_version
-    )
+    grpc_server, _ = await start_grpc(gateway, settings.grpc_port)
+    structlog.get_logger().info("gateway_boot", models=len(models), version=settings.service_version)
 
 
 @app.on_stop

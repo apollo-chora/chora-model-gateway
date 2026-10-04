@@ -2,133 +2,441 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
+from .config import DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_MODEL_ID, ModelSpec
 from .runtime import Result, Runtime
+
+FINISH_BUDGET_BLOCK = "budget_block"
 
 
 class GatewayError(Exception):
-    def __init__(self, status: int, code: str, message: str) -> None:
+    """A terminal invoke failure. Carries the transport status, the OpenAI
+    error type, the machine code, and optionally the provider's own HTTP
+    status so the facade can relay it instead of flattening it.
+
+    `kind` mirrors the old gateway's error taxonomy for gRPC status mapping:
+    "config" (FailedPrecondition), "invoke" (Unavailable), "bare" (InvalidArgument).
+    """
+
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        err_type: str = "upstream_error",
+        upstream_status: int | None = None,
+        inner: Exception | None = None,
+        kind: str = "invoke",
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        self.message = message
+        self.err_type = err_type
+        self.upstream_status = upstream_status
+        self.inner = inner
+        self.kind = kind
+
+    def __str__(self) -> str:
+        return self.message
+
+
+class BudgetBlock(Exception):
+    """A budget refusal. The HTTP facade maps it to 402; gRPC answers with a
+    normal response carrying finish_reason BUDGET_BLOCK."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+@dataclass(slots=True)
+class Invocation:
+    id: str
+    text: str = ""
+    model: str = ""
+    vendor: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    cost: int = 0
+    fallback_chain: list[str] = field(default_factory=list)
+    latency_ms: int = 0
+    finish: str = "complete"
+    finish_detail: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    search_queries: list[str] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    image: bytes = b""
+    image_mime: str = ""
+    revised_prompt: str = ""
+    grounding_surface: str = ""
+
+
+def _new_invocation_id() -> str:
+    generator = getattr(uuid, "uuid7", None)
+    if generator is not None:
+        return str(generator())
+    return str(uuid.uuid4())
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 class Gateway:
-    def __init__(self, settings: Any, models: dict[str, Any], db: Any) -> None:
+    def __init__(self, settings: Any, models: dict[str, ModelSpec], db: Any) -> None:
         self.settings = settings
         self.models = models
         self.db = db
         self.runtime = Runtime(settings.search_provider)
 
-    def model(self, name: str | None) -> Any:
-        spec = self.models.get((name or "").lower())
+    def model(self, name: str | None) -> ModelSpec:
+        spec = self.models.get((name or "").strip().lower())
         if not spec:
-            raise GatewayError(404, "model_not_found", f'model "{name}" is not in the registry')
+            raise GatewayError(
+                502,
+                "vendor_error",
+                f'policy: model "{name}" is not in the registry',
+                err_type="upstream_error",
+            )
         return spec
 
-    @staticmethod
-    def cost(spec: Any, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> int:
-        pricing = spec.pricing
-        return (
-            input_tokens * int(pricing.get("input_per_mtok_usd_micros", 0))
-            + output_tokens * int(pricing.get("output_per_mtok_usd_micros", 0))
-            + cached_tokens * int(pricing.get("cached_per_mtok_usd_micros", 0))
-        ) // 1_000_000
+    def _resolve(self, model: str | None, caller_fallbacks: list[str]) -> tuple[ModelSpec, list[ModelSpec]]:
+        """Resolve the primary target and the fallback chain. The caller's own
+        chain comes first; the registry's declared chain follows. An unknown
+        name fails the whole resolve rather than being silently dropped."""
+        primary = self.model(model)
+        chain: list[ModelSpec] = []
+        seen = {primary.id}
+        for name in caller_fallbacks:
+            candidate = self.model(name)
+            if candidate.id in seen:
+                continue
+            seen.add(candidate.id)
+            chain.append(candidate)
+        for name in primary.fallback_ids:
+            registry_candidate = self.models.get(name.strip().lower())
+            if registry_candidate is None:
+                registry_candidate = self.model(name)
+            if registry_candidate.id in seen:
+                continue
+            seen.add(registry_candidate.id)
+            chain.append(registry_candidate)
+        return primary, chain
 
-    async def invoke(self, request: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _apply_output_ceiling(params: dict[str, Any], ceiling: int) -> dict[str, Any]:
+        if ceiling <= 0 or not params:
+            return params
+        requested = params.get("max_tokens")
+        if requested is None:
+            return params
+        try:
+            value = float(requested)
+        except (TypeError, ValueError):
+            return params
+        if value <= ceiling:
+            return params
+        out = dict(params)
+        out["max_tokens"] = ceiling
+        return out
+
+    async def invoke(self, request: dict[str, Any]) -> Invocation:
         started = time.monotonic()
-        invocation_id = request.get("invocation_id") or str(uuid.uuid4())
-        spec = self.model(request.get("model") or request.get("logical_model_id"))
+
+        tenant = (request.get("tenant_id") or "").strip()
+        gcid = (request.get("gcid") or "").strip()
+        agent = (request.get("agent_id") or "").strip()
+        model_id = (request.get("model") or request.get("logical_model_id") or "").strip()
         modality = request.get("modality") or "TEXT"
-        required = "image" if modality == "IMAGE" else ("web_search" if modality == "GROUNDED" else "chat")
-        if required not in spec.capabilities:
-            raise GatewayError(400, "grounding_unavailable" if required == "web_search" else "invalid_model_capability", f'model "{spec.id}" does not advertise the "{required}" capability')
-        tenant = request.get("tenant_id") or self.settings.default_tenant_id
-        gcid = request.get("gcid") or self.settings.default_gcid
-        agent = request.get("agent_id") or self.settings.default_agent_id
+        prompt = request.get("prompt") or ""
+        contents = request.get("contents_json") or request.get("messages")
+
+        # Step 1 — validate the envelope. A missing tenant or model is a caller
+        # bug, and discovering it at the vendor would mean a billable request
+        # with no attribution.
+        if not tenant:
+            raise GatewayError(502, "vendor_error", "tenant_id required", inner=ValueError("tenant_id required"))
+        if not gcid:
+            raise GatewayError(502, "vendor_error", "gcid required", inner=ValueError("gcid required"))
+        if not agent:
+            raise GatewayError(502, "vendor_error", "agent_id required", inner=ValueError("agent_id required"))
+        if not model_id:
+            raise GatewayError(
+                502, "vendor_error", "logical_model_id required", inner=ValueError("logical_model_id required")
+            )
+        if modality not in ("", "TEXT", "IMAGE", "GROUNDED"):
+            raise GatewayError(
+                502,
+                "vendor_error",
+                f'response_modality "{modality}" is not one of TEXT, IMAGE, GROUNDED',
+                inner=ValueError("bad modality"),
+            )
+        if not prompt and not contents:
+            raise GatewayError(
+                502,
+                "vendor_error",
+                "prompt or contents_json required (an empty request is still billed by most providers)",
+                inner=ValueError("empty request"),
+            )
+
+        invocation_id = request.get("invocation_id") or _new_invocation_id()
+
+        # Step 3 — resolve the registry entry and the fallback chain.
+        spec, chain = self._resolve(model_id, list(request.get("fallback_ids") or []))
+
+        # Step 4 — keyed idempotency. A redelivered dispatch with the same key
+        # must bill once, so the claim is taken BEFORE any spend.
+        deduped = False
+        dispatch_key = request.get("dispatch_idempotency_key") or ""
+        if dispatch_key:
+            claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code") or agent)
+            deduped = not claimed
+
+        # Step 5 — load the tenant budget.
         budget = await self.db.budget(tenant)
 
-        if budget and budget["spent_usd_micros"] >= budget["budget_usd_micros"]:
-            if budget["policy"] == "block":
-                raise GatewayError(402, "budget_exhausted", "tenant LLM budget exhausted")
-            if budget["policy"] == "downgrade" and budget["downgrade_to_logical_model_id"]:
-                spec = self.model(budget["downgrade_to_logical_model_id"])
+        # Step 6 — decide the budget action. An unrecognised policy fails safe:
+        # refuse rather than allow.
+        policy = (budget or {}).get("policy") or ""
+        exhausted = bool(budget) and (budget["spent_usd_micros"] >= budget["budget_usd_micros"])
+        if exhausted:
+            if policy == "downgrade":
+                downgrade_id = budget.get("downgrade_to_logical_model_id") or ""
+                try:
+                    spec, chain = self._resolve(downgrade_id, [])
+                except GatewayError as exc:
+                    raise GatewayError(
+                        500,
+                        "gateway_misconfigured",
+                        f"budget downgrade target is not in the model registry: {downgrade_id}",
+                        err_type="server_error",
+                        inner=exc,
+                        kind="config",
+                    ) from exc
+            elif policy != "alert":
+                raise BudgetBlock("tenant LLM budget exhausted; policy=block")
 
-        dispatch_key = request.get("dispatch_idempotency_key", "")
-        claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code", agent)) if dispatch_key else True
-        fallback_ids = request.get("fallback_ids") or spec.fallback_ids
-        chain = [spec]
-        for model_id in fallback_ids:
-            chain.append(self.model(model_id))
+        # Step 7 + 8 — resolve the credential and dispatch, walking the chain.
+        action_code = request.get("action_code") or agent
+        if modality == "IMAGE":
+            action_code = request.get("action_code") or f"{self.settings.default_agent_id}_image"
+        params = self._apply_output_ceiling(dict(request.get("params") or {}), spec.max_output_tokens)
+        grounded = modality == "GROUNDED"
+        traceparent = request.get("traceparent") or ""
+        tracestate = request.get("tracestate") or ""
+
         result: Result | None = None
-        last_error: Exception | None = None
+        used: ModelSpec | None = None
         tried: list[str] = []
+        last_error: Exception | None = None
+        upstream_status: int | None = None
 
-        for candidate in chain:
-            tried.append(f"{candidate.format}:{candidate.model}")
+        for candidate in [spec, *chain]:
+            tried.append(f"{candidate.vendor}:{candidate.model}")
+            if candidate.api_key_env and not candidate.api_key:
+                raise GatewayError(
+                    500,
+                    "gateway_misconfigured",
+                    f'credential reference "{candidate.api_key_env}" is set but resolves to an empty value',
+                    err_type="server_error",
+                    kind="config",
+                )
+            required = "image" if modality == "IMAGE" else ("web_search" if grounded else "chat")
+            if not candidate.supports(required):
+                raise GatewayError(
+                    500,
+                    "gateway_misconfigured",
+                    f'model "{candidate.id}" does not advertise the "{required}" capability '
+                    f"(it has: {', '.join(candidate.capabilities)})",
+                    err_type="server_error",
+                    kind="config",
+                )
+            if grounded and candidate.grounding is None:
+                raise GatewayError(
+                    500,
+                    "gateway_misconfigured",
+                    f'model "{candidate.id}" advertises "web_search" but its registry entry '
+                    "configures no grounding endpoint; add a `grounding:` block",
+                    err_type="server_error",
+                    kind="config",
+                )
             try:
-                if request.get("modality") == "IMAGE":
+                if modality == "IMAGE":
                     result = await self.runtime.image(
-                        candidate, request.get("prompt", ""), request.get("params", {})
+                        candidate, prompt, request.get("params") or {}, traceparent, tracestate
                     )
                 else:
                     result = await self.runtime.generate(
                         candidate,
-                        request.get("prompt", ""),
-                        request.get("system", ""),
+                        prompt,
+                        request.get("system") or "",
                         request.get("messages"),
                         request.get("tools"),
-                        request.get("params", {}),
-                        request.get("modality") == "GROUNDED",
+                        params,
+                        grounded,
+                        traceparent,
+                        tracestate,
                     )
-                spec = candidate
+                used = candidate
                 break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — the chain walks on any failure
                 last_error = exc
+                status_getter = getattr(exc, "upstream_status", None)
+                if callable(status_getter):
+                    upstream_status = status_getter()
 
-        if result is None:
-            raise GatewayError(502, "vendor_error", f"provider chain exhausted: {last_error}")
+        if result is None or used is None:
+            raise GatewayError(
+                502,
+                "vendor_error",
+                f"all targets exhausted: {last_error}",
+                inner=last_error,
+                upstream_status=upstream_status,
+            )
 
-        charge = self.cost(spec, result.input_tokens, result.output_tokens, result.cached_tokens) if claimed else 0
+        # Step 9 — settle the budget + the ledger atomically. A deduped
+        # dispatch still ledgers the real cost; only the debit is suppressed.
+        charge = result.cost
+        debit = 0 if deduped else charge
         event = {
-            "invocation_id": invocation_id, "tenant_id": tenant, "gcid": gcid,
-            "model_id": result.model or spec.model, "vendor": result.vendor,
-            "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
-            "cached_tokens": result.cached_tokens, "agent_role": request.get("action_code") or agent,
-            "surface": request.get("surface"), "modality": request.get("modality") or "TEXT",
-            "fallback_chain": tried, "debit_deduped": not claimed,
-            "traceparent": request.get("traceparent"), "tracestate": request.get("tracestate"),
+            "invocation_id": invocation_id,
+            "tenant_id": tenant,
+            "gcid": gcid,
+            "model_id": result.model or used.model,
+            "vendor": result.vendor or used.vendor,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "cached_tokens": result.cached_tokens,
+            "agent_role": action_code,
+            "surface": request.get("surface"),
+            "modality": modality or "TEXT",
+            "fallback_chain": tried,
+            "debit_deduped": deduped,
+            "traceparent": traceparent,
+            "tracestate": tracestate,
             "gateway_version": self.settings.service_version,
+            "cost_usd_micros": charge,
         }
-        await self.db.settle(event, charge)
-        return {
-            "id": invocation_id, "result": result, "model": result.model or spec.model,
-            "vendor": result.vendor,
-            "usage": {"input": result.input_tokens, "output": result.output_tokens,
-                      "cached": result.cached_tokens, "cost": charge},
-            "fallback_chain": tried, "latency_ms": int((time.monotonic() - started) * 1000),
-        }
+        try:
+            await self.db.settle(event, debit)
+        except Exception as exc:
+            raise GatewayError(502, "vendor_error", f"settle failed: {exc}", inner=exc) from exc
+
+        return Invocation(
+            id=invocation_id,
+            text=result.text,
+            model=result.model or used.model,
+            vendor=result.vendor or used.vendor,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cached_tokens=result.cached_tokens,
+            cost=charge,
+            fallback_chain=tried,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            finish=result.finish,
+            finish_detail=result.finish_detail,
+            tool_calls=result.tool_calls,
+            citations=result.citations,
+            search_queries=result.search_queries,
+            messages=result.messages,
+            image=result.image,
+            image_mime=result.mime,
+            revised_prompt=result.revised_prompt,
+            grounding_surface=(used.grounding.effective_surface(used.vendor) if grounded and used.grounding else ""),
+        )
 
     async def embed(self, request: dict[str, Any]) -> dict[str, Any]:
-        invocation_id = request.get("invocation_id") or str(uuid.uuid4())
-        spec = self.model(request.get("model") or request.get("logical_model_id") or "text-embedding-004")
-        if "embeddings" not in spec.capabilities and spec.kind != "embedding":
-            raise GatewayError(500, "gateway_misconfigured", f'embed: model "{spec.id}" does not advertise the "embeddings" capability')
-        tenant = request.get("tenant_id") or self.settings.default_tenant_id
-        gcid = request.get("gcid") or self.settings.default_gcid
-        agent = request.get("agent_id") or self.settings.default_agent_id
-        values, input_tokens, model = await self.runtime.embed(
-            spec, request["text"], int(request.get("dimensions", 0))
-        )
-        await self.db.settle(
-            {
-                "invocation_id": invocation_id, "tenant_id": tenant, "gcid": gcid,
-                "model_id": model, "vendor": "embeddings", "input_tokens": input_tokens,
-                "output_tokens": 0, "cached_tokens": 0, "agent_role": agent, "modality": "TEXT",
-                "fallback_chain": [f"embeddings:{model}"], "traceparent": request.get("traceparent"),
-                "tracestate": request.get("tracestate"), "gateway_version": self.settings.service_version,
-            },
-            0,
-        )
-        return {"id": invocation_id, "values": values, "model": model, "vendor": "embeddings", "input_tokens": input_tokens}
+        tenant = (request.get("tenant_id") or "").strip()
+        gcid = (request.get("gcid") or "").strip()
+        agent = (request.get("agent_id") or "").strip()
+        text = request.get("text") or ""
+        if not tenant:
+            raise GatewayError(
+                400, "invalid_request", "embed: tenant_id required", err_type="invalid_request_error", kind="bare"
+            )
+        if not gcid:
+            raise GatewayError(
+                400, "invalid_request", "embed: gcid required", err_type="invalid_request_error", kind="bare"
+            )
+        if not agent:
+            raise GatewayError(
+                400, "invalid_request", "embed: agent_id required", err_type="invalid_request_error", kind="bare"
+            )
+        if not text:
+            raise GatewayError(
+                400, "invalid_request", "embed: text required", err_type="invalid_request_error", kind="bare"
+            )
+
+        invocation_id = request.get("invocation_id") or _new_invocation_id()
+        model_id = (request.get("model") or request.get("logical_model_id") or "").strip()
+        if not model_id:
+            model_id = DEFAULT_EMBEDDING_MODEL_ID
+        spec = self.model(model_id)
+        if not spec.supports("embeddings"):
+            raise GatewayError(
+                500,
+                "gateway_misconfigured",
+                f'embed: model "{spec.id}" does not advertise the "embeddings" capability',
+                err_type="server_error",
+                kind="config",
+            )
+        dimensions = int(request.get("dimensions") or 0)
+        if dimensions <= 0:
+            dimensions = DEFAULT_EMBEDDING_DIMENSIONS
+        if spec.api_key_env and not spec.api_key:
+            raise GatewayError(
+                500,
+                "gateway_misconfigured",
+                f'credential reference "{spec.api_key_env}" is set but resolves to an empty value',
+                err_type="server_error",
+                kind="config",
+            )
+        try:
+            values, input_tokens, model = await self.runtime.embed(
+                spec, text, dimensions, request.get("traceparent") or "", request.get("tracestate") or ""
+            )
+        except Exception as exc:
+            status_getter = getattr(exc, "upstream_status", None)
+            raise GatewayError(
+                502,
+                "vendor_error",
+                f"embed: vendor dispatch: {exc}",
+                inner=exc,
+                upstream_status=status_getter() if callable(status_getter) else None,
+                kind="bare",
+            ) from exc
+
+        event = {
+            "invocation_id": invocation_id,
+            "tenant_id": tenant,
+            "gcid": gcid,
+            "model_id": model,
+            "vendor": spec.vendor,
+            "input_tokens": input_tokens,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "agent_role": agent,
+            "modality": "TEXT",
+            "fallback_chain": [f"{spec.vendor}:{spec.model}"],
+            "traceparent": request.get("traceparent") or "",
+            "tracestate": request.get("tracestate") or "",
+            "gateway_version": self.settings.service_version,
+            "cost_usd_micros": 0,
+        }
+        await self.db.settle(event, 0)
+        return {
+            "id": invocation_id,
+            "values": values,
+            "model": model,
+            "vendor": spec.vendor,
+            "input_tokens": input_tokens,
+        }

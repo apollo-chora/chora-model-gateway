@@ -3,3 +3,13 @@
 
 # Build output
 /out/
+
+# Generated protobuf stubs (built by the Dockerfile and local dev)
+/model_gateway_service_pb2.py
+/model_gateway_service_pb2_grpc.py
+
+# Python
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
