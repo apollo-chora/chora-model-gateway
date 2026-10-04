@@ -425,3 +425,60 @@ async def test_ledger_row_carries_the_trace_context(models, db, provider):
     assert event["gateway_version"] == "test"
     assert event["surface"] == "openai_compat"
     assert event["modality"] == "TEXT"
+
+
+# ---------------------------------------------------------------------------
+# Registry endpoint paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_custom_chat_completions_path_is_used(models, db, provider):
+    # The Go registry honors a per-entry chat_completions_path override; the
+    # runtime must dispatch to it rather than the default /chat/completions.
+    models["chatty"] = make_spec(chat_completions_path="/custom/chat")
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    path, _, _, url = provider.last
+    assert path == "/v1/custom/chat"
+    assert url == "https://api.example.test/v1/custom/chat"
+
+
+@pytest.mark.anyio
+async def test_absolute_chat_completions_path_is_used_verbatim(models, db, provider):
+    models["chatty"] = make_spec(chat_completions_path="https://llm.internal.example.com/generate")
+    gateway = make_gateway(models, db, provider)
+    await invoke(gateway, db)
+    path, _, _, url = provider.last
+    assert url == "https://llm.internal.example.com/generate"
+
+
+@pytest.mark.anyio
+async def test_custom_messages_path_is_used_for_anthropic(models, db, provider):
+    models["claude"] = make_spec(
+        id="claude",
+        vendor="anthropic",
+        format="messages",
+        model="claude-upstream",
+        messages_path="/custom/messages",
+    )
+    gateway = make_gateway(models, db, provider)
+    provider.route(
+        "https://api.example.test/v1/custom/messages",
+        {
+            "id": "m",
+            "model": "claude-upstream",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        },
+    )
+    response = await invoke(gateway, db, model="claude")
+    assert response.text == "hi"
+    path, _, _, url = provider.last
+    assert path == "/v1/custom/messages"

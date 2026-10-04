@@ -248,7 +248,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _chat_url(self, spec: ModelSpec) -> str:
-        return _resolve_endpoint(spec.base_url, "", "/chat/completions")
+        return _resolve_endpoint(spec.base_url, spec.chat_completions_path, "/chat/completions")
 
     def _build_chat_body(
         self,
@@ -261,7 +261,7 @@ class Runtime:
         grounded: bool,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
-        if messages:
+        if isinstance(messages, list) and messages:
             body["messages"] = messages
         else:
             chat_messages: list[dict[str, Any]] = []
@@ -437,7 +437,7 @@ class Runtime:
         params: dict[str, Any],
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
-        if messages:
+        if isinstance(messages, list) and messages:
             body["input"] = messages
         else:
             body["input"] = prompt
@@ -564,7 +564,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _messages_url(self, spec: ModelSpec) -> str:
-        return _resolve_endpoint(spec.base_url, "", "/v1/messages")
+        return _resolve_endpoint(spec.base_url, spec.messages_path, "/v1/messages")
 
     def _build_messages_body(
         self,
@@ -581,7 +581,7 @@ class Runtime:
             "system": system,
             "max_tokens": spec.max_output_tokens or 4096,
         }
-        if messages:
+        if isinstance(messages, list) and messages:
             body["messages"] = messages
         else:
             body["messages"] = [{"role": "user", "content": prompt}]
@@ -685,7 +685,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _images_url(self, spec: ModelSpec) -> str:
-        return _resolve_endpoint(spec.base_url, "", "/images/generations")
+        return _resolve_endpoint(spec.base_url, spec.images_path, "/images/generations")
 
     async def image(
         self,
@@ -738,7 +738,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _embeddings_url(self, spec: ModelSpec) -> str:
-        return _resolve_endpoint(spec.base_url, "", "/embeddings")
+        return _resolve_endpoint(spec.base_url, spec.embeddings_path, "/embeddings")
 
     async def embed(
         self,

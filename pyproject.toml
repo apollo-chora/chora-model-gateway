@@ -3,30 +3,30 @@ name = "chora-model-gateway"
 version = "0.2.0"
 requires-python = ">=3.13"
 dependencies = [
-    "blacksheep>=2.4.0",
-    "granian>=2.5.0",
-    "structlog>=25.4.0",
-    "strands-agents[openai,anthropic]>=1.45.0",
-    "openai>=2.0.0",
-    "anthropic>=0.69.0",
-    "asyncpg>=0.30.0",
-    "pyyaml>=6.0.2",
-    "grpcio>=1.75.0",
-    "protobuf>=6.32.0",
+    "blacksheep>=2.6.3",
+    "granian>=2.8.4",
+    "structlog>=26.1.0",
+    "strands-agents>=1.57.2",
+    "openai>=3.24.0",
+    "anthropic>=1.11.0",
+    "asyncpg>=0.31.0",
+    "pyyaml>=6.0.3",
+    "grpcio>=1.84.0",
+    "protobuf>=7.36.2",
 ]
 
 [dependency-groups]
 dev = [
-    "anyio>=4.12.0",
-    "bandit>=1.8.6",
-    "grpcio-tools>=1.75.0",
-    "mypy>=1.18.2",
-    "pytest>=8.4.0",
-    "pytest-cov>=7.0.0",
-    "ruff>=0.13.0",
-    "types-pyyaml>=6.0.12.20250915",
-    "types-grpcio>=1.0.0",
-    "types-protobuf>=6.30.2.20250822",
+    "anyio>=4.15.1",
+    "bandit>=1.9.4",
+    "grpcio-tools>=1.84.0",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.10",
+    "types-pyyaml>=6.0.12.20260906",
+    "types-grpcio>=1.84.0.20260928",
+    "types-protobuf>=7.35.1.20260906",
 ]
 
 [tool.ruff]

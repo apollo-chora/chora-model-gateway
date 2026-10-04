@@ -53,6 +53,13 @@ class ModelSpec:
     format: str = "chat_completions"
     model: str = ""
     base_url: str = ""
+    # Endpoint path overrides, mirroring the Go registry. Empty means the
+    # provider default (/chat/completions, /v1/messages, /images/generations,
+    # /embeddings); an absolute URL is used verbatim.
+    chat_completions_path: str = ""
+    messages_path: str = ""
+    images_path: str = ""
+    embeddings_path: str = ""
     api_key_env: str = ""
     capabilities: list[str] = field(default_factory=lambda: ["chat"])
     fallback_ids: list[str] = field(default_factory=list)
@@ -200,6 +207,10 @@ def load_models(path: str) -> dict[str, ModelSpec]:
                     format="messages" if provider == "anthropic" else "chat_completions",
                     model=str(row.get("upstream_model") or row["id"]),
                     base_url=str(row.get("base_url", "")),
+                    chat_completions_path=str(row.get("chat_completions_path", "")),
+                    messages_path=str(row.get("messages_path", "")),
+                    images_path=str(row.get("images_path", "")),
+                    embeddings_path=str(row.get("embeddings_path", "")),
                     api_key_env=str(row.get("api_key_env", "")),
                     capabilities=caps,
                     fallback_ids=[str(fb) for fb in row.get("fallback_ids", [])],

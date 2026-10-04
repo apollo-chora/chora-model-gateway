@@ -45,11 +45,15 @@ class GatewayError(Exception):
 
 class BudgetBlock(Exception):
     """A budget refusal. The HTTP facade maps it to 402; gRPC answers with a
-    normal response carrying finish_reason BUDGET_BLOCK."""
+    normal response carrying finish_reason BUDGET_BLOCK.
 
-    def __init__(self, detail: str) -> None:
+    Carries the resolved invocation id so the gRPC response echoes the id the
+    gateway generated (matching the Go domain, which returns it on a block)."""
+
+    def __init__(self, detail: str, invocation_id: str = "") -> None:
         super().__init__(detail)
         self.detail = detail
+        self.invocation_id = invocation_id
 
 
 @dataclass(slots=True)
@@ -223,7 +227,7 @@ class Gateway:
                         kind="config",
                     ) from exc
             elif policy != "alert":
-                raise BudgetBlock("tenant LLM budget exhausted; policy=block")
+                raise BudgetBlock("tenant LLM budget exhausted; policy=block", invocation_id=invocation_id)
 
         # Step 7 + 8 — resolve the credential and dispatch, walking the chain.
         action_code = request.get("action_code") or agent

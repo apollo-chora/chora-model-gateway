@@ -111,6 +111,22 @@ async def test_invoke_contents_and_tools_json(grpc_channel):
 
 
 @pytest.mark.anyio
+async def test_invoke_malformed_contents_json_degrades_gracefully(grpc_channel):
+    # The Go adapter passes the raw string to the domain and the vendor falls
+    # back to the prompt; a malformed payload must not escape as gRPC UNKNOWN.
+    response = await call(
+        grpc_channel,
+        tenant_id="t",
+        gcid="g",
+        agent_id="a",
+        logical_model_id="chatty",
+        prompt="hi",
+        contents_json="{not valid json",
+    )
+    assert response.completion == "hello from the stub"
+
+
+@pytest.mark.anyio
 async def test_invoke_fallback_ids(grpc_channel, provider, models):
     # The primary fails; the caller-declared fallback (on its own host) answers.
     models["textonly"] = make_models()["textonly"]
@@ -229,6 +245,8 @@ async def test_invoke_budget_block_is_a_normal_response(grpc_channel, db):
     # finish_reason BUDGET_BLOCK, not a gRPC status error.
     assert response.finish_reason == pb.FINISH_REASON_BUDGET_BLOCK
     assert "budget" in response.finish_detail
+    # The generated invocation id is preserved even when the caller omitted one.
+    assert response.invocation_id
 
 
 # ---------------------------------------------------------------------------

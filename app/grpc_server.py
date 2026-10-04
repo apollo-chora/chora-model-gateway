@@ -27,6 +27,20 @@ def _timestamp() -> Timestamp:
     return value
 
 
+def _decode_json(value: str) -> Any:
+    """Decode a JSON string field, degrading to None on malformed input.
+
+    The Go adapter passes these raw strings straight to the domain and lets
+    the vendor fall back to the prompt; decoding here must never raise past
+    the status mapper."""
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except ValueError:
+        return None
+
+
 class ModelGateway(pbg.ModelGatewayServiceServicer):
     def __init__(self, gateway: Gateway) -> None:
         self.gateway = gateway
@@ -42,8 +56,8 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
                     "logical_model_id": request.logical_model_id,
                     "prompt": request.prompt,
                     "system": request.system_prompt,
-                    "messages": json.loads(request.contents_json) if request.contents_json else None,
-                    "tools": json.loads(request.tools_json) if request.tools_json else None,
+                    "messages": _decode_json(request.contents_json),
+                    "tools": _decode_json(request.tools_json),
                     "params": (
                         MessageToDict(request.generation_config, preserving_proto_field_name=True)
                         if request.HasField("generation_config")
@@ -60,7 +74,7 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
             )
         except BudgetBlock as exc:
             return pb.InvokeResponse(
-                invocation_id=request.invocation_id,
+                invocation_id=exc.invocation_id or request.invocation_id,
                 finish_reason=pb.FINISH_REASON_BUDGET_BLOCK,
                 finish_detail=exc.detail,
                 completed_at=_timestamp(),
