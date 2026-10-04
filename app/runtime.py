@@ -88,9 +88,15 @@ def _first_non_empty(*values: str) -> str:
 
 
 class _HttpTransport:
-    """Default transport: httpx with one client per (base_url, auth) pair."""
+    """Default transport: httpx with one client per (base_url, auth) pair.
 
-    def __init__(self) -> None:
+    The timeout is generous on purpose: a grounded reasoning run makes several
+    upstream calls (search, page reads, then the answer) and can take well over
+    a minute. The old gateway's HTTP server used a 5-minute write timeout.
+    """
+
+    def __init__(self, timeout: float = 300.0) -> None:
+        self._timeout = timeout
         self._clients: dict[tuple[str, str, str], httpx.AsyncClient] = {}
 
     def _client(self, spec: ModelSpec) -> httpx.AsyncClient:
@@ -106,7 +112,7 @@ class _HttpTransport:
             client = httpx.AsyncClient(
                 base_url=spec.base_url,
                 headers=headers,
-                timeout=httpx.Timeout(120.0, connect=10.0),
+                timeout=httpx.Timeout(self._timeout, connect=10.0),
             )
             self._clients[key] = client
         return client

@@ -165,7 +165,8 @@ class Client:
         self._client = TestClient(app)
 
     async def __aenter__(self) -> Client:
-        self._app = self._client._test_simulator.app
+        simulator: Any = self._client._test_simulator
+        self._app = simulator.app
         await self._app.start()
         return self
 

@@ -205,7 +205,15 @@ SEARCH_PROVIDER=exa
 EXA_API_KEY=
 ```
 
-The intent is **native grounding first**. External search is a fallback for models that cannot search natively; it is not a second LLM and does not require a separate `SEARCH_LLM_*` model.
+The intent is **native grounding first**. Grounding requires the configured
+model to support hosted web search natively: the gateway sends the provider's
+own `web_search` tool and never silently downgrades a grounded request to an
+ungrounded one. A model that does not advertise the `web_search` capability is
+refused with `grounding_unavailable` (or `wrong_grounding_surface` when the
+model grounds on a different surface), matching the gateway's historical
+behavior. `SEARCH_PROVIDER` / `EXA_API_KEY` are retained in the deployment
+configuration for an external search fallback, but no fallback is dispatched
+unless the model can serve the request.
 
 ## Using the model registry
 
@@ -271,7 +279,7 @@ The existing public HTTP surface is retained:
 | `GET` | `/v1/models` | available logical model IDs |
 | `GET` | `/v1/models/{model}` | model lookup |
 | `GET` | `/healthz` | process health |
-| `GET` | `/readyz` | PostgreSQL readiness |
+| `GET` | `/readyz` | always `ready` once the process is serving |
 
 Streaming is currently not implemented. Requests with `stream: true` return an explicit `501 streaming_unsupported` error instead of pretending to provide SSE.
 
@@ -363,7 +371,9 @@ docker compose logs gateway
 curl -i http://localhost:8080/readyz
 ```
 
-`/readyz` depends on PostgreSQL connectivity.
+`/readyz` answers `ready` once the process is serving. Budget and ledger
+writes go to PostgreSQL; if the database is unreachable the gateway still
+serves requests, but settlements fail (see the logs).
 
 ### Upstream model cannot be reached
 
@@ -436,7 +446,7 @@ granian --interface asgi --host 0.0.0.0 --port 8080 app.gateway:app
 app/
   config.py         environment + registry configuration
   database.py       PostgreSQL budget, ledger, and idempotency operations
-  runtime.py        Strands/OpenAI/Anthropic model execution
+  runtime.py        provider dispatch (chat/responses/messages/images/embeddings)
   service.py        gateway orchestration, budgets, fallbacks, accounting
   http.py           OpenAI-compatible BlackSheep HTTP surface
   grpc_server.py    Chora gRPC compatibility surface

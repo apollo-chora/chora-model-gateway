@@ -120,11 +120,9 @@ def _env(prefix: str, kind: str, default_format: str) -> ModelSpec | None:
         "yes",
         "on",
     }
-    capabilities = [kind]
-    if kind == "text":
-        capabilities = ["chat", "tools"]
-        if grounding:
-            capabilities.append("web_search")
+    capabilities = {"text": ["chat", "tools"], "image": ["image"], "embedding": ["embeddings"]}[kind]
+    if kind == "text" and grounding:
+        capabilities = [*capabilities, "web_search"]
     spec = ModelSpec(
         id=model,
         kind=kind,

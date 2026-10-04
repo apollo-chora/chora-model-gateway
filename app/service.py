@@ -295,10 +295,11 @@ class Gateway:
                     upstream_status = status_getter()
 
         if result is None or used is None:
+            detail = f"all targets exhausted: {last_error}" if last_error else "all targets exhausted"
             raise GatewayError(
                 502,
                 "vendor_error",
-                f"all targets exhausted: {last_error}",
+                detail,
                 inner=last_error,
                 upstream_status=upstream_status,
             )
