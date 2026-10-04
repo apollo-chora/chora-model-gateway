@@ -7,6 +7,7 @@ from typing import Any
 from blacksheep import Application, Request
 from blacksheep.server.responses import json as reply
 
+from .compat import embedding_inputs, flatten_responses_input, generation_params, model_entry, wants_grounding
 from .service import Gateway, GatewayError
 
 
@@ -28,25 +29,26 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
 
     @app.router.get("/healthz")
     async def health() -> Any:
-        return reply({"status": "ok"})
+        from blacksheep.server.responses import text
+        return text("ok")
 
     @app.router.get("/readyz")
     async def ready() -> Any:
         ok = await db.ping()
-        return reply({"status": "ready" if ok else "not_ready"}, status=200 if ok else 503)
+        from blacksheep.server.responses import text
+        return text("ready" if ok else "not_ready", status=200 if ok else 503)
 
     @app.router.get("/v1/models")
     async def list_models() -> Any:
         data = [
-            {"id": model_id, "object": "model", "created": 0, "owned_by": "chora"}
-            for model_id in dict.fromkeys(models)
+            model_entry(models[model_id]) for model_id in dict.fromkeys(models)
         ]
         return reply({"object": "list", "data": data})
 
     @app.router.get("/v1/models/{model}")
     async def get_model(model: str) -> Any:
-        gateway.model(model)
-        return reply({"id": model, "object": "model", "created": 0, "owned_by": "chora"})
+        spec = gateway.model(model)
+        return reply(model_entry(spec))
 
     def attributes(request: Request) -> dict[str, Any]:
         def header(name: bytes) -> str:
@@ -54,7 +56,7 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
             return value.decode() if value else ""
 
         return {
-            "tenant_id": header(b"x-chora-tenant-id") or None,
+            "tenant_id": header(b"x-chora-tenant-id") or request.query.get("tenant") or None,
             "gcid": header(b"x-chora-gcid") or None,
             "traceparent": header(b"traceparent"),
             "tracestate": header(b"tracestate"),
@@ -80,7 +82,7 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
                 prompt = str(input_message.get("content", ""))
 
         tools = body.get("tools", [])
-        grounded = any("web_search" in str(tool.get("type", "")).lower() for tool in tools)
+        grounded = wants_grounding(tools)
         response = await gateway.invoke(
             attributes(request)
             | {
@@ -89,11 +91,7 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
                 "system": system,
                 "messages": messages,
                 "tools": tools,
-                "params": {
-                    key: body[key]
-                    for key in ("temperature", "top_p", "max_tokens", "seed", "stop")
-                    if key in body
-                },
+                "params": generation_params(body),
                 "modality": "GROUNDED" if grounded else "TEXT",
                 "action_code": body.get("user"),
                 "surface": "openai_compat",
@@ -133,22 +131,17 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
                 "streaming_unsupported",
                 'this gateway does not implement SSE streaming; retry with "stream": false',
             )
-        grounded = any(
-            "web_search" in str(tool.get("type", "")).lower()
-            or "web_fetch" in str(tool.get("type", "")).lower()
-            for tool in body.get("tools", [])
-        )
-        input_value = body.get("input", "")
-        prompt = (
-            input_value
-            if isinstance(input_value, str)
-            else "\n".join(str(item.get("content", item.get("text", ""))) for item in input_value)
-        )
+        grounded = wants_grounding(body.get("tools", []))
+        try:
+            prompt, response_messages = flatten_responses_input(body.get("input"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_input", str(exc)) from exc
         response = await gateway.invoke(
             attributes(request)
             | {
                 "model": body.get("model"),
                 "prompt": prompt,
+                "messages": response_messages,
                 "system": body.get("instructions", ""),
                 "params": {
                     key: body[key]
@@ -225,10 +218,12 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
     @app.router.post("/v1/embeddings")
     async def embeddings(request: Request) -> Any:
         body = await request.json()
-        inputs = body.get("input")
-        inputs = [inputs] if isinstance(inputs, str) else inputs
-        if not isinstance(inputs, list) or not inputs:
-            raise GatewayError(400, "invalid_parameter", '"input" must be a string or an array of strings')
+        if str(body.get("encoding_format", "")).lower() == "base64":
+            raise GatewayError(501, "base64_unsupported", '"encoding_format": "base64" is not implemented; omit it or send "float"')
+        try:
+            inputs = embedding_inputs(body.get("input"))
+        except ValueError as exc:
+            raise GatewayError(400, "invalid_parameter", str(exc)) from exc
         rows: list[dict[str, Any]] = []
         total = 0
         for index, text in enumerate(inputs):
