@@ -1,14 +1,63 @@
 [project]
-name="chora-model-gateway"
-version="0.2.0"
-requires-python=">=3.13"
-dependencies=[
-"blacksheep>=2.4.0","granian>=2.5.0","structlog>=25.4.0",
-"strands-agents[openai,anthropic]>=1.45.0","openai>=2.0.0","anthropic>=0.69.0",
-"asyncpg>=0.30.0","pyyaml>=6.0.2","grpcio>=1.75.0","protobuf>=6.32.0"
+name = "chora-model-gateway"
+version = "0.2.0"
+requires-python = ">=3.13"
+dependencies = [
+    "blacksheep>=2.4.0",
+    "granian>=2.5.0",
+    "structlog>=25.4.0",
+    "strands-agents[openai,anthropic]>=1.45.0",
+    "openai>=2.0.0",
+    "anthropic>=0.69.0",
+    "asyncpg>=0.30.0",
+    "pyyaml>=6.0.2",
+    "grpcio>=1.75.0",
+    "protobuf>=6.32.0",
 ]
+
 [dependency-groups]
-dev=["grpcio-tools>=1.75.0","pytest>=8.4.0","ruff>=0.13.0"]
+dev = [
+    "bandit>=1.8.6",
+    "grpcio-tools>=1.75.0",
+    "mypy>=1.18.2",
+    "pytest>=8.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.13.0",
+    "types-pyyaml>=6.0.12.20250915",
+]
+
 [tool.ruff]
-line-length=110
-target-version="py313"
+line-length = 110
+target-version = "py313"
+extend-exclude = ["model_gateway_service_pb2.py", "model_gateway_service_pb2_grpc.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["app", "tests"]
+exclude = "(model_gateway_service_pb2|model_gateway_service_pb2_grpc)\\.py$"
+check_untyped_defs = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["blacksheep.*", "granian.*", "strands.*"]
+ignore_missing_imports = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-config --strict-markers"
