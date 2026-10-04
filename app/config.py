@@ -203,6 +203,8 @@ def load_models(path: str) -> dict[str, ModelSpec]:
             provider = str(row.get("provider", "")).lower()
             if provider not in ("openai", "anthropic"):
                 raise ConfigError(f"provider {provider!r} is not one of: openai, anthropic")
+            if not str(row.get("base_url", "")).strip():
+                raise ConfigError("base_url is required for a registry entry")
             for field in ("chat_completions_path", "messages_path", "images_path", "embeddings_path"):
                 _validate_endpoint(field, str(row.get(field, "") or ""))
             if "image" in caps and "chat" not in caps:

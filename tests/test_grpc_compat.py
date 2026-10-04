@@ -433,6 +433,25 @@ async def test_embed_default_model_when_omitted(grpc_channel, db):
     assert response.model_version == "embedder-upstream"
 
 
+@pytest.mark.anyio
+async def test_embed_upstream_status_relay(grpc_channel, provider):
+    # The Go mapError relays the provider's upstream status on the Embed path
+    # too (the vendor error stays in the chain), so 401/403/404/429 map to
+    # specialized codes and anything else to UNAVAILABLE.
+    cases = {
+        401: grpc.StatusCode.UNAUTHENTICATED,
+        403: grpc.StatusCode.UNAUTHENTICATED,
+        404: grpc.StatusCode.NOT_FOUND,
+        429: grpc.StatusCode.RESOURCE_EXHAUSTED,
+        503: grpc.StatusCode.UNAVAILABLE,
+    }
+    for status, expected in cases.items():
+        provider.route("https://api.example.test/v1/embeddings", {"error": "boom"}, status=status)
+        with pytest.raises(AioRpcError) as exc_info:
+            await grpc_channel.Embed(pb.EmbedRequest(tenant_id="t", gcid="g", agent_id="a", text="hi"))
+        assert exc_info.value.code() == expected, status
+
+
 # ---------------------------------------------------------------------------
 # GroundedSearch
 # ---------------------------------------------------------------------------
