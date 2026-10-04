@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +51,15 @@ import (
 )
 
 func main() {
+	// `-healthcheck` makes the binary its own Docker HEALTHCHECK.
+	//
+	// The runtime image is distroless: no shell, no curl, no wget for a
+	// healthcheck to call. Giving the binary the flag means the image is
+	// health-checkable without adding a single package to it.
+	if len(os.Args) == 2 && os.Args[1] == "-healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
@@ -57,6 +67,26 @@ func main() {
 		logger.Error("gateway exited with error", "err", err)
 		os.Exit(1)
 	}
+}
+
+// runHealthcheck probes the local /healthz endpoint and returns a process exit
+// code.
+func runHealthcheck() int {
+	addr := net.JoinHostPort("127.0.0.1", envOr("CHORA_HTTP_PORT", "8080"))
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + addr + "/healthz") // #nosec G107 -- loopback, fixed path
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
 }
 
 func run() error {
@@ -349,4 +379,12 @@ func defaultTransport() http.RoundTripper {
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
 	return transport
+}
+
+// envOr reads an environment variable, falling back when unset or blank.
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }

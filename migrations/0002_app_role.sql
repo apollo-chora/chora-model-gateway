@@ -34,9 +34,25 @@ GRANT SELECT, INSERT, UPDATE ON invoke_debit_claims    TO chora_app;
 -- Sequence privileges, in case any table later grows a serial column.
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO chora_app;
 
--- A convenience for `psql -U chora_app` when inspecting the ledger:
--- without this the role cannot SET a GUC it does not own.
-GRANT chora_app TO chora;
+-- No membership GRANT here on purpose.
+--
+-- An earlier version did `GRANT chora_app TO chora` as a convenience so a human
+-- could `psql -U chora_app` and SET the tenant GUC. That is
+-- deployment-specific — the local compose stack has a `chora` superuser, but a
+-- server provisioned with `postgres` does not — and an unguarded GRANT against
+-- a missing role ABORTS the migration, leaving the privileges above applied but
+-- the file half-run. Observed live on 2026-10-04.
+--
+-- To inspect the ledger, just connect as chora_app with its password and set
+-- the GUC in the same session:
+--
+--   psql "postgres://chora_app:<password>@host:5432/chora_observability" \
+--     -c "BEGIN; SET LOCAL chora.tenant_id='<uuid>'; SELECT ...; COMMIT;"
+--
+-- Membership is only needed for passwordless admin access, which is an
+-- operator decision, not a schema one:
+--
+--   GRANT chora_app TO <your-admin-role>;
 
 -- Belt and braces: assert the exemption is actually gone. If a future change
 -- grants BYPASSRLS to this role, this notice fires at migration time rather

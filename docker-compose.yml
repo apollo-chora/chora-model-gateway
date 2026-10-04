@@ -117,10 +117,17 @@ services:
       # models.yaml is a `docker compose restart gateway`, not a rebuild.
       - ./config/models.yaml:/etc/chora/models.yaml:ro
 
+    # The runtime image is distroless, so there is no shell or curl for a
+    # healthcheck to call. The binary answers `-healthcheck` itself.
+    healthcheck:
+      test: ["CMD", "/service", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
     security_opt:
       - no-new-privileges:true
-
-    read_only: false
 
     stop_grace_period: 45s
 
