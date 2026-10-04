@@ -28,10 +28,9 @@ class Database:
             return await connection.fetchval("SELECT 1") == 1
 
     async def budget(self, tenant_id: str) -> dict[str, Any] | None:
-        async with self._pool().acquire() as connection:
-            async with connection.transaction():
-                await connection.execute("SELECT set_config('chora.tenant_id',$1,true)", tenant_id)
-                row = await connection.fetchrow(
+        async with self._pool().acquire() as connection, connection.transaction():
+            await connection.execute("SELECT set_config('chora.tenant_id',$1,true)", tenant_id)
+            row = await connection.fetchrow(
                     """SELECT budget_usd_micros, spent_usd_micros, policy,
                               downgrade_to_logical_model_id
                        FROM per_tenant_llm_budget
@@ -42,7 +41,7 @@ class Database:
                       LIMIT 1 FOR UPDATE""",
                     tenant_id,
                 )
-                return dict(row) if row else None
+            return dict(row) if row else None
 
     async def claim(self, gcid: str, key: str, action: str) -> bool:
         if not key:
@@ -50,30 +49,30 @@ class Database:
         action = action or "unspecified"
         async with self._pool().acquire() as connection:
             async with connection.transaction():
-                tag = await connection.execute(
+            tag = await connection.execute(
                     """INSERT INTO invoke_debit_claims
                            (gcid, dispatch_idempotency_key, action_code)
                        VALUES($1::uuid,$2,$3) ON CONFLICT DO NOTHING""",
                     gcid, key, action,
                 )
-                if tag.endswith("1"):
-                    return True
-                await connection.execute(
+            if tag.endswith("1"):
+                return True
+            await connection.execute(
                     """UPDATE invoke_debit_claims
                           SET dedupe_count=dedupe_count+1,last_deduped_at=now()
                         WHERE gcid=$1::uuid AND dispatch_idempotency_key=$2
                           AND action_code=$3""",
                     gcid, key, action,
                 )
-                return False
+            return False
 
     async def settle(self, event: dict[str, Any], cost: int) -> None:
         async with self._pool().acquire() as connection:
             async with connection.transaction():
-                await connection.execute(
+            await connection.execute(
                     "SELECT set_config('chora.tenant_id',$1,true)", event["tenant_id"]
                 )
-                if cost > 0:
+            if cost > 0:
                     await connection.execute(
                         """UPDATE per_tenant_llm_budget
                               SET spent_usd_micros=spent_usd_micros+$2,updated_at=now()
@@ -82,7 +81,7 @@ class Database:
                               AND budget_period_end>now()""",
                         event["tenant_id"], cost,
                     )
-                await connection.execute(
+            await connection.execute(
                     """INSERT INTO token_usage_ledger(
                            invocation_id,tenant_id,gcid,model_id,vendor,input_tokens,
                            output_tokens,cached_tokens,cost_usd_micros,agent_role,

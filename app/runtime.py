@@ -51,17 +51,17 @@ class Runtime:
             return await self.anthropic(spec, prompt, system, messages, tools, values, grounded)
 
         if spec.format == "responses":
-            model = OpenAIResponsesModel(
+            response_model = OpenAIResponsesModel(
                 model_id=spec.model,
                 client_args=self.args(spec),
                 params=values | ({"tools": [{"type": "web_search"}]} if grounded and spec.support_grounding else {}),
             )
         else:
-            model = OpenAIModel(model_id=spec.model, client_args=self.args(spec), params=values)
+            response_model = OpenAIModel(model_id=spec.model, client_args=self.args(spec), params=values)
 
         # Strands' Agent constructor accepts client-side tools via `tools`.
         # Provider-native search is already configured on the model above.
-        agent = Agent(model=model, system_prompt=system or None, tools=[] if grounded and not spec.support_grounding else None)
+        agent = Agent(model=response_model, system_prompt=system or None, tools=[] if grounded and not spec.support_grounding else None)
         result = await asyncio.to_thread(agent, prompt)
         return Result(text=str(result), model=spec.model, vendor=spec.format)
 
