@@ -1,26 +1,130 @@
-import time,uuid
-from .runtime import Runtime
+from __future__ import annotations
+
+import time
+import uuid
+from typing import Any
+
+from .runtime import Result, Runtime
+
+
 class GatewayError(Exception):
- def __init__(self,status,code,message):super().__init__(message);self.status,self.code=status,code
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+
+
 class Gateway:
- def __init__(self,settings,models,db):self.settings,self.models,self.db,self.runtime=settings,models,db,Runtime(settings.search_provider)
- def model(self,n):
-  s=self.models.get((n or "").lower())
-  if not s:raise GatewayError(404,"model_not_found",f'model "{n}" is not in the registry')
-  return s
- def cost(self,s,i,o,c=0):
-  p=s.pricing;return(i*int(p.get("input_per_mtok_usd_micros",0))+o*int(p.get("output_per_mtok_usd_micros",0))+c*int(p.get("cached_per_mtok_usd_micros",0)))//1000000
- async def invoke(self,q):
-  st=time.monotonic();iid=q.get("invocation_id") or str(uuid.uuid4());s=self.model(q.get("model") or q.get("logical_model_id"));t=q.get("tenant_id") or self.settings.default_tenant_id;g=q.get("gcid") or self.settings.default_gcid;a=q.get("agent_id") or self.settings.default_agent_id;b=await self.db.budget(t)
-  if b and b["spent_usd_micros"]>=b["budget_usd_micros"]:
-   if b["policy"]=="block":raise GatewayError(402,"budget_exhausted","tenant LLM budget exhausted")
-   if b["policy"]=="downgrade" and b["downgrade_to_logical_model_id"]:s=self.model(b["downgrade_to_logical_model_id"])
-  claimed=await self.db.claim(g,q.get("dispatch_idempotency_key",""),q.get("action_code",a));chain=[s]+[self.model(x) for x in q.get("fallback_ids",[]) if x.lower() in self.models];z=None;last=None;tried=[]
-  for x in chain:
-   tried.append(f"{x.format}:{x.model}")
-   try:z=await(self.runtime.image(x,q.get("prompt",""),q.get("params",{})) if q.get("modality")=="IMAGE" else self.runtime.generate(x,q.get("prompt",""),q.get("system",""),q.get("messages"),q.get("tools"),q.get("params",{}),q.get("modality")=="GROUNDED"));s=x;break
-   except Exception as e:last=e
-  if z is None:raise GatewayError(502,"vendor_error",f"provider chain exhausted: {last}")
-  cost=self.cost(s,z.input_tokens,z.output_tokens,z.cached_tokens) if claimed else 0;e={"invocation_id":iid,"tenant_id":t,"gcid":g,"model_id":z.model or s.model,"vendor":z.vendor,"input_tokens":z.input_tokens,"output_tokens":z.output_tokens,"cached_tokens":z.cached_tokens,"agent_role":q.get("action_code") or a,"surface":q.get("surface"),"modality":q.get("modality") or "TEXT","fallback_chain":tried,"debit_deduped":not claimed,"traceparent":q.get("traceparent"),"tracestate":q.get("tracestate"),"gateway_version":self.settings.service_version};await self.db.settle(e,cost);return{"id":iid,"result":z,"model":z.model or s.model,"vendor":z.vendor,"usage":{"input":z.input_tokens,"output":z.output_tokens,"cached":z.cached_tokens,"cost":cost},"fallback_chain":tried,"latency_ms":int((time.monotonic()-st)*1000)}
- async def embed(self,q):
-  iid=q.get("invocation_id") or str(uuid.uuid4());s=self.model(q.get("model") or q.get("logical_model_id") or "text-embedding-004");t=q.get("tenant_id") or self.settings.default_tenant_id;g=q.get("gcid") or self.settings.default_gcid;a=q.get("agent_id") or self.settings.default_agent_id;v,n,m=await self.runtime.embed(s,q["text"],int(q.get("dimensions",0)));await self.db.settle({"invocation_id":iid,"tenant_id":t,"gcid":g,"model_id":m,"vendor":"embeddings","input_tokens":n,"output_tokens":0,"cached_tokens":0,"agent_role":a,"modality":"TEXT","fallback_chain":[f"embeddings:{m}"],"traceparent":q.get("traceparent"),"tracestate":q.get("tracestate"),"gateway_version":self.settings.service_version},0);return{"id":iid,"values":v,"model":m,"vendor":"embeddings","input_tokens":n}
+    def __init__(self, settings: Any, models: dict[str, Any], db: Any) -> None:
+        self.settings = settings
+        self.models = models
+        self.db = db
+        self.runtime = Runtime(settings.search_provider)
+
+    def model(self, name: str | None) -> Any:
+        spec = self.models.get((name or "").lower())
+        if not spec:
+            raise GatewayError(404, "model_not_found", f'model "{name}" is not in the registry')
+        return spec
+
+    @staticmethod
+    def cost(spec: Any, input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> int:
+        pricing = spec.pricing
+        return (
+            input_tokens * int(pricing.get("input_per_mtok_usd_micros", 0))
+            + output_tokens * int(pricing.get("output_per_mtok_usd_micros", 0))
+            + cached_tokens * int(pricing.get("cached_per_mtok_usd_micros", 0))
+        ) // 1_000_000
+
+    async def invoke(self, request: dict[str, Any]) -> dict[str, Any]:
+        started = time.monotonic()
+        invocation_id = request.get("invocation_id") or str(uuid.uuid4())
+        spec = self.model(request.get("model") or request.get("logical_model_id"))
+        tenant = request.get("tenant_id") or self.settings.default_tenant_id
+        gcid = request.get("gcid") or self.settings.default_gcid
+        agent = request.get("agent_id") or self.settings.default_agent_id
+        budget = await self.db.budget(tenant)
+
+        if budget and budget["spent_usd_micros"] >= budget["budget_usd_micros"]:
+            if budget["policy"] == "block":
+                raise GatewayError(402, "budget_exhausted", "tenant LLM budget exhausted")
+            if budget["policy"] == "downgrade" and budget["downgrade_to_logical_model_id"]:
+                spec = self.model(budget["downgrade_to_logical_model_id"])
+
+        claimed = await self.db.claim(
+            gcid, request.get("dispatch_idempotency_key", ""), request.get("action_code", agent)
+        )
+        chain = [spec] + [
+            self.model(model_id)
+            for model_id in request.get("fallback_ids", [])
+            if model_id.lower() in self.models
+        ]
+        result: Result | None = None
+        last_error: Exception | None = None
+        tried: list[str] = []
+
+        for candidate in chain:
+            tried.append(f"{candidate.format}:{candidate.model}")
+            try:
+                if request.get("modality") == "IMAGE":
+                    result = await self.runtime.image(
+                        candidate, request.get("prompt", ""), request.get("params", {})
+                    )
+                else:
+                    result = await self.runtime.generate(
+                        candidate,
+                        request.get("prompt", ""),
+                        request.get("system", ""),
+                        request.get("messages"),
+                        request.get("tools"),
+                        request.get("params", {}),
+                        request.get("modality") == "GROUNDED",
+                    )
+                spec = candidate
+                break
+            except Exception as exc:
+                last_error = exc
+
+        if result is None:
+            raise GatewayError(502, "vendor_error", f"provider chain exhausted: {last_error}")
+
+        charge = self.cost(spec, result.input_tokens, result.output_tokens, result.cached_tokens) if claimed else 0
+        event = {
+            "invocation_id": invocation_id, "tenant_id": tenant, "gcid": gcid,
+            "model_id": result.model or spec.model, "vendor": result.vendor,
+            "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
+            "cached_tokens": result.cached_tokens, "agent_role": request.get("action_code") or agent,
+            "surface": request.get("surface"), "modality": request.get("modality") or "TEXT",
+            "fallback_chain": tried, "debit_deduped": not claimed,
+            "traceparent": request.get("traceparent"), "tracestate": request.get("tracestate"),
+            "gateway_version": self.settings.service_version,
+        }
+        await self.db.settle(event, charge)
+        return {
+            "id": invocation_id, "result": result, "model": result.model or spec.model,
+            "vendor": result.vendor,
+            "usage": {"input": result.input_tokens, "output": result.output_tokens,
+                      "cached": result.cached_tokens, "cost": charge},
+            "fallback_chain": tried, "latency_ms": int((time.monotonic() - started) * 1000),
+        }
+
+    async def embed(self, request: dict[str, Any]) -> dict[str, Any]:
+        invocation_id = request.get("invocation_id") or str(uuid.uuid4())
+        spec = self.model(request.get("model") or request.get("logical_model_id") or "text-embedding-004")
+        tenant = request.get("tenant_id") or self.settings.default_tenant_id
+        gcid = request.get("gcid") or self.settings.default_gcid
+        agent = request.get("agent_id") or self.settings.default_agent_id
+        values, input_tokens, model = await self.runtime.embed(
+            spec, request["text"], int(request.get("dimensions", 0))
+        )
+        await self.db.settle(
+            {
+                "invocation_id": invocation_id, "tenant_id": tenant, "gcid": gcid,
+                "model_id": model, "vendor": "embeddings", "input_tokens": input_tokens,
+                "output_tokens": 0, "cached_tokens": 0, "agent_role": agent, "modality": "TEXT",
+                "fallback_chain": [f"embeddings:{model}"], "traceparent": request.get("traceparent"),
+                "tracestate": request.get("tracestate"), "gateway_version": self.settings.service_version,
+            },
+            0,
+        )
+        return {"id": invocation_id, "values": values, "model": model, "vendor": "embeddings", "input_tokens": input_tokens}
