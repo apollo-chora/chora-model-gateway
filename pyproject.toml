@@ -38,6 +38,12 @@ extend-exclude = ["model_gateway_service_pb2.py", "model_gateway_service_pb2_grp
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
 ignore = ["E501"]
 
+[tool.ruff.lint.isort]
+# The protobuf stubs are generated at build time and are not present in the
+# source tree, so ruff must be told they are first-party to sort their
+# imports consistently with and without the generated files.
+known-first-party = ["model_gateway_service_pb2", "model_gateway_service_pb2_grpc"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
