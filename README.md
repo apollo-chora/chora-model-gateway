@@ -284,8 +284,8 @@ The existing public HTTP surface is retained:
 | `POST` | `/v1/embeddings` | embeddings |
 | `GET` | `/v1/models` | available logical model IDs |
 | `GET` | `/v1/models/{model}` | model lookup |
-| `GET` | `/healthz` | process health |
-| `GET` | `/readyz` | always `ready` once the process is serving |
+| `GET` | `/healthz` | process alive |
+| `GET` | `/readyz` | database reachable and usable (503 until then) |
 
 Streaming is currently not implemented. Requests with `stream: true` return an explicit `501 streaming_unsupported` error instead of pretending to provide SSE.
 
@@ -304,38 +304,49 @@ The protobuf source is in `proto/model_gateway_service.proto`; Python stubs are 
 
 ## Events and messages
 
-The gateway has **no inbound event contract**. The original implementation
-only *recorded* internal usage: every completed dispatch wrote one row to
-`token_usage_ledger` (its "outbox"), keyed by the invocation id. It ran no
-Pub/Sub subscriber, consumed no queue, and exposed no event-ingestion
-endpoint — an external client cannot deliver an event to it. The Python
-gateway keeps exactly that behavior: the ledger row is the only usage
-output, and no event surface is invented here.
+The gateway has **no inbound broker subscription** — an external client cannot
+deliver an event to it, and it runs no subscriber. It does have an outbound
+event contract: on every completed metered invocation it atomically updates the
+tenant budget and appends a canonical
+`chora.observability.token_usage.recorded.v1` event to the
+`chora_observability` transactional outbox (`outbox_events`), keyed by the
+invocation/usage id. `chora-observability` owns the database schema, drains the
+shared outbox to the event bus, and projects `TokenUsageRecorded` into
+`token_usage_ledger`. The gateway owns no database schema and writes no
+ledger rows directly.
 
 ## PostgreSQL, budgets, and usage
 
-The Compose deployment initializes PostgreSQL from `migrations/`.
+The gateway owns **no database and no migrations**. It is a privileged client of
+the `chora_observability` database, which is owned and migrated by
+`chora-observability`. The gateway connects as the non-superuser
+`chora_observability_app_rw` role so PostgreSQL row-level security remains
+effective.
 
-The important tables are:
+The important tables (all owned by `chora-observability`):
 
 | Table | Purpose |
 | --- | --- |
 | `per_tenant_llm_budget` | tenant budget and exhaustion policy |
-| `token_usage_ledger` | usage/accounting record for completed model calls |
+| `outbox_events` | transactional outbox; the gateway writes `TokenUsageRecorded` here |
 | `invoke_debit_claims` | idempotent debit claims |
+| `token_usage_ledger` | usage/accounting record (populated by observability, not the gateway) |
 
-The gateway connects as the non-superuser `chora_app` role so PostgreSQL row-level security remains effective.
+Budget enforcement and the usage outbox are written in one transaction: the
+budget is debited only when the outbox row inserts, so a redelivery cannot
+debit twice. The outbox row carries the canonical `TokenUsageRecorded` protobuf
+payload plus explicit `tenant_id`/`gcid`, and sets both `chora.tenant_id` (budget
+RLS) and `app.current_tenant` (outbox RLS) for the transaction.
 
-Inspect recent ledger entries:
+Inspect recent outbox entries (run from the Chora root Compose, or any client
+with access to the migrated `chora_observability` database):
 
 ```bash
-docker compose exec -T -e PGPASSWORD=chora_app postgres \
-  psql -h 127.0.0.1 -U chora_app -d chora_observability \
-  -c "BEGIN;
-      SET LOCAL chora.tenant_id='00000000-0000-7000-8000-000000000001';
-      SELECT model_id, input_tokens, output_tokens, cost_usd_micros, recorded_at
-      FROM token_usage_ledger
-      ORDER BY recorded_at DESC
+psql "$CHORA_DATABASE_URL" -c "BEGIN;
+      SET LOCAL app.current_tenant='00000000-0000-7000-8000-000000000001';
+      SELECT event_type, topic, tenant_id, gcid, idempotency_key
+      FROM outbox_events
+      ORDER BY occurred_at DESC
       LIMIT 10;
       COMMIT;"
 ```
@@ -382,14 +393,17 @@ The last command permanently removes local gateway database data.
 
 ```bash
 docker compose ps
-docker compose logs postgres
 docker compose logs gateway
 curl -i http://localhost:8080/readyz
 ```
 
-`/readyz` answers `ready` once the process is serving. Budget and ledger
-writes go to PostgreSQL; if the database is unreachable the gateway still
-serves requests, but settlements fail (see the logs).
+`/readyz` answers `ready` only when the database is reachable and usable. The
+gateway requires PostgreSQL for budget enforcement, debit idempotency, and the
+usage outbox — a model call that succeeds while settlement cannot be recorded
+is a billing-correctness failure, so the gateway reports `503 not ready` until
+the database responds. If it is not ready, confirm `CHORA_DATABASE_URL` points
+at a migrated `chora_observability` database and that the
+`chora_observability_app_rw` role can connect.
 
 ### Upstream model cannot be reached
 
@@ -425,12 +439,18 @@ For registry entries, check the variable named by that entry's `api_key_env`.
 
 ### Start from a clean database
 
+The gateway has no database of its own. To run it, point `CHORA_DATABASE_URL`
+at a `chora_observability` database migrated by `chora-observability` — the
+easiest path is the Chora root Compose:
+
 ```bash
+# from the Chora root
 docker compose down -v
 docker compose up -d --build
 ```
 
-Migrations under `migrations/` are applied by PostgreSQL only when the data directory is first initialized.
+The root Compose initializes PostgreSQL, runs `observability-migrate`, then
+starts the services. The gateway connects as `chora_observability_app_rw`.
 
 ## Development
 

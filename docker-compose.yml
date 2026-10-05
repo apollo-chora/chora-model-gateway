@@ -1,21 +1,24 @@
 name: chora-model-gateway
+
+# The model gateway owns NO database and NO migrations. It is a privileged
+# client of the chora_observability database, which is owned by chora-observability.
+# The gateway connects as chora_observability_app_rw (NOBYPASSRLS).
+#
+# Recommended: run from the Chora root Compose, which owns the DB lifecycle:
+#   postgres -> observability-migrate -> observability -> model-gateway
+#
+# Advanced standalone: point CHORA_DATABASE_URL at a migrated chora_observability DB:
+#   docker run -e CHORA_DATABASE_URL=postgres://chora_observability_app_rw:...@host:5432/chora_observability ...
+
 services:
-  postgres:
-    image: postgres:18-alpine
-    restart: unless-stopped
-    environment: {POSTGRES_USER: chora, POSTGRES_PASSWORD: chora, POSTGRES_DB: chora_observability}
-    ports: ["${POSTGRES_HOST_PORT:-5433}:5432"]
-    volumes: ["pgdata:/var/lib/postgresql","./migrations:/docker-entrypoint-initdb.d:ro"]
-    healthcheck: {test: ["CMD-SHELL","pg_isready -U chora -d chora_observability"], interval: 2s, timeout: 3s, retries: 30}
   gateway:
     build: .
     image: walfa/chora-model-gateway:latest
     restart: unless-stopped
-    depends_on: {postgres: {condition: service_healthy}}
-    ports: ["${GATEWAY_HTTP_PORT:-8080}:8080","${GATEWAY_GRPC_PORT:-9090}:9090"]
+    ports: ["${GATEWAY_HTTP_PORT:-8080}:8080", "${GATEWAY_GRPC_PORT:-9090}:9090"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     environment:
-      CHORA_DATABASE_URL: postgres://chora_app:chora_app@postgres:5432/chora_observability?sslmode=disable
+      CHORA_DATABASE_URL: ${CHORA_DATABASE_URL:-postgres://chora_observability_app_rw:chora@postgres:5432/chora_observability?sslmode=disable}
       CHORA_MODEL_REGISTRY: /app/config/models.yaml
       CHORA_HTTP_PORT: "8080"
       CHORA_GRPC_PORT: "9090"
@@ -40,4 +43,3 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       META_API_KEY: ${META_API_KEY:-}
     volumes: ["./config/models.yaml:/app/config/models.yaml:ro"]
-volumes: {pgdata: {}}

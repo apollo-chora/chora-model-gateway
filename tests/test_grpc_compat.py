@@ -168,8 +168,7 @@ async def test_invoke_idempotency_key_skips_the_debit_but_still_ledgers(grpc_cha
         dispatch_idempotency_key="dispatch-1",
     )
     event = db.ledger[0]
-    assert event["debit_deduped"] is False
-    assert db.settle_calls[0][1] == event["cost_usd_micros"] > 0
+    assert db.settle_calls[0][1] == event["cost_micros"] > 0
 
     db.budget_state = {
         "budget_usd_micros": 100,
@@ -187,9 +186,8 @@ async def test_invoke_idempotency_key_skips_the_debit_but_still_ledgers(grpc_cha
         dispatch_idempotency_key="dispatch-1",
     )
     event = db.ledger[-1]
-    assert event["debit_deduped"] is True
-    # The ledger row still carries the real cost; only the debit is suppressed.
-    assert event["cost_usd_micros"] > 0
+    # The event still carries the real cost; only the debit is suppressed.
+    assert event["cost_micros"] > 0
     assert db.settle_calls[-1][1] == 0
 
 
@@ -313,10 +311,10 @@ class _FailingDB(FakeDB):
         self._fail_claim = fail_claim
         self._fail_budget = fail_budget
 
-    async def claim(self, gcid, key, action):
+    async def claim(self, gcid, key, action, invocation_id):
         if self._fail_claim:
             raise RuntimeError("db down")
-        return await super().claim(gcid, key, action)
+        return await super().claim(gcid, key, action, invocation_id)
 
     async def budget(self, tenant_id):
         if self._fail_budget:
@@ -393,8 +391,8 @@ async def test_embed_happy_path(grpc_channel, db):
     assert response.vendor == "openai"
     assert response.model_version == "embedder-upstream"
     assert response.usage.input_tokens == 4
-    # Embeddings are unpriced: the ledger row exists with a zero cost.
-    assert db.ledger[0]["cost_usd_micros"] == 0
+    # Embeddings are unpriced: the event is enqueued with a zero cost.
+    assert db.ledger[0]["cost_micros"] == 0
     assert db.ledger[0]["input_tokens"] == 4
 
 

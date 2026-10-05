@@ -154,11 +154,9 @@ async def test_cost_ledger_carries_the_real_cost_when_deduped(models, db, provid
     await invoke(gateway, db, dispatch_idempotency_key="k1")
     await invoke(gateway, db, dispatch_idempotency_key="k1")
     first, second = db.ledger
-    assert first["debit_deduped"] is False
-    assert second["debit_deduped"] is True
-    assert first["cost_usd_micros"] == second["cost_usd_micros"] > 0
-    # Only the first call moved the budget.
-    assert db.settle_calls[0][1] == first["cost_usd_micros"]
+    # Both events carry the real cost; only the first moved the budget.
+    assert first["cost_micros"] == second["cost_micros"] > 0
+    assert db.settle_calls[0][1] == first["cost_micros"]
     assert db.settle_calls[1][1] == 0
 
 
@@ -455,7 +453,7 @@ async def test_no_credential_ref_sends_no_auth_header(models, db, provider):
 @pytest.mark.anyio
 async def test_settle_failure_fails_the_call(models, db, provider):
     class FailingDB(FakeDB):
-        async def settle(self, event, debit):
+        async def debit_and_enqueue(self, event, debit):
             raise RuntimeError("deadlock detected")
 
     gateway = make_gateway(models, FailingDB(), provider)
@@ -473,8 +471,6 @@ async def test_ledger_row_carries_the_trace_context(models, db, provider):
     assert event["traceparent"] == "00-abc"
     assert event["tracestate"] == "foo=bar"
     assert event["gateway_version"] == "test"
-    assert event["surface"] == "openai_compat"
-    assert event["modality"] == "TEXT"
 
 
 # ---------------------------------------------------------------------------
@@ -547,10 +543,10 @@ class _DBErrorDB(FakeDB):
         self._fail_claim = fail_claim
         self._fail_budget = fail_budget
 
-    async def claim(self, gcid, key, action):
+    async def claim(self, gcid, key, action, invocation_id):
         if self._fail_claim:
             raise RuntimeError("db down")
-        return await super().claim(gcid, key, action)
+        return await super().claim(gcid, key, action, invocation_id)
 
     async def budget(self, tenant_id):
         if self._fail_budget:

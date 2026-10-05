@@ -71,6 +71,16 @@ def create_app(gateway: Gateway, db: Any, models: dict[str, Any]) -> Application
 
     @app.router.get("/readyz")
     async def ready() -> Any:
+        # Readiness = database reachable and usable. The gateway requires the
+        # DB for budget enforcement, debit idempotency, and the usage outbox, so
+        # a model call that succeeds while settlement cannot be recorded is a
+        # billing-correctness failure — the gateway must not report ready then.
+        try:
+            ok = await db.ping()
+        except Exception:
+            ok = False
+        if not ok:
+            return _text("not ready", status=503)
         return _text("ready")
 
     # ------------------------------------------------------------------

@@ -31,7 +31,7 @@ class FakeDB:
     async def budget(self, tenant_id: str) -> dict[str, Any] | None:
         return self.budget_state
 
-    async def claim(self, gcid: str, key: str, action: str) -> bool:
+    async def claim(self, gcid: str, key: str, action: str, invocation_id: str) -> bool:
         if not key:
             return True
         claim_key = (gcid, key, action or "unspecified")
@@ -40,7 +40,7 @@ class FakeDB:
         self.claims[claim_key] = 1
         return True
 
-    async def settle(self, event: dict[str, Any], debit: int) -> None:
+    async def debit_and_enqueue(self, event: dict[str, Any], debit: int) -> None:
         self.settle_calls.append((event, debit))
         self.ledger.append(event)
 

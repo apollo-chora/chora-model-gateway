@@ -312,6 +312,27 @@ wheels = [
 ]
 
 [[package]]
+name = "chora-contracts"
+version = "2.1.0"
+source = { directory = "../chora-contracts" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "grpcio", specifier = ">=1.66" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
+    { name = "protobuf", specifier = ">=5.28" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "chora-model-gateway"
 version = "0.2.0"
 source = { virtual = "." }
@@ -319,6 +340,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "asyncpg" },
     { name = "blacksheep" },
+    { name = "chora-contracts" },
     { name = "granian" },
     { name = "grpcio" },
     { name = "openai" },
@@ -347,6 +369,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=1.11.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "blacksheep", specifier = ">=2.6.3" },
+    { name = "chora-contracts", directory = "../chora-contracts" },
     { name = "granian", specifier = ">=2.8.4" },
     { name = "grpcio", specifier = ">=1.84.0" },
     { name = "openai", specifier = ">=3.24.0" },

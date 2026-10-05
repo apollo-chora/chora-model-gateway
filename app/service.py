@@ -203,7 +203,7 @@ class Gateway:
         dispatch_key = request.get("dispatch_idempotency_key") or ""
         if dispatch_key:
             try:
-                claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code") or agent)
+                claimed = await self.db.claim(gcid, dispatch_key, request.get("action_code") or agent, invocation_id)
             except Exception as exc:
                 raise GatewayError(502, "vendor_error", f"idempotency claim failed: {exc}", inner=exc) from exc
             deduped = not claimed
@@ -319,11 +319,14 @@ class Gateway:
                 upstream_status=upstream_status,
             )
 
-        # Step 9 — settle the budget + the ledger atomically. A deduped
-        # dispatch still ledgers the real cost; only the debit is suppressed.
+        # Step 9 — debit the budget and enqueue the usage event atomically. The
+        # event is the gateway's only usage output: observability owns the
+        # token_usage_ledger and populates it from this outbox row. A deduped
+        # dispatch still enqueues the real cost; only the debit is suppressed.
         charge = result.cost
         debit = 0 if deduped else charge
         event = {
+            "usage_id": invocation_id,
             "invocation_id": invocation_id,
             "tenant_id": tenant,
             "gcid": gcid,
@@ -332,18 +335,16 @@ class Gateway:
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
             "cached_tokens": result.cached_tokens,
+            "cost_micros": charge,
             "agent_role": action_code,
-            "surface": request.get("surface"),
-            "modality": modality or "TEXT",
+            "action_code": action_code,
             "fallback_chain": tried,
-            "debit_deduped": deduped,
             "traceparent": traceparent,
             "tracestate": tracestate,
             "gateway_version": self.settings.service_version,
-            "cost_usd_micros": charge,
         }
         try:
-            await self.db.settle(event, debit)
+            await self.db.debit_and_enqueue(event, debit)
         except Exception as exc:
             raise GatewayError(502, "vendor_error", f"settle failed: {exc}", inner=exc) from exc
 
@@ -432,6 +433,7 @@ class Gateway:
             ) from exc
 
         event = {
+            "usage_id": invocation_id,
             "invocation_id": invocation_id,
             "tenant_id": tenant,
             "gcid": gcid,
@@ -440,15 +442,15 @@ class Gateway:
             "input_tokens": input_tokens,
             "output_tokens": 0,
             "cached_tokens": 0,
+            "cost_micros": 0,
             "agent_role": agent,
-            "modality": "TEXT",
+            "action_code": agent,
             "fallback_chain": [f"{spec.vendor}:{spec.model}"],
             "traceparent": request.get("traceparent") or "",
             "tracestate": request.get("tracestate") or "",
             "gateway_version": self.settings.service_version,
-            "cost_usd_micros": 0,
         }
-        await self.db.settle(event, 0)
+        await self.db.debit_and_enqueue(event, 0)
         return {
             "id": invocation_id,
             "values": values,
