@@ -12,7 +12,10 @@ name: chora-model-gateway
 
 services:
   gateway:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        chora-contracts: ../chora-contracts
     image: walfa/chora-model-gateway:latest
     restart: unless-stopped
     ports: ["${GATEWAY_HTTP_PORT:-8080}:8080", "${GATEWAY_GRPC_PORT:-9090}:9090"]

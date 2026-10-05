@@ -21,6 +21,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Check out chora-contracts (sibling path dependency)
+        uses: actions/checkout@v7
+        with:
+          repository: apollo-chora/chora-contracts
+          path: chora-contracts
+
+      - name: Link sibling dependency
+        run: ln -sfn "$GITHUB_WORKSPACE/chora-contracts" "$GITHUB_WORKSPACE/../chora-contracts"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
