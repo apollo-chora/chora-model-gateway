@@ -517,4 +517,4 @@ For local development, `docker compose up --build` builds from the checked-out s
 
 ---
 
-The deployment is intentionally local-first: PostgreSQL, explicit environment configuration, and model endpoints you control. There is no required GCP runtime, Secret Manager, workload identity, or managed Pub/Sub dependency.
+The deployment is intentionally local-first: PostgreSQL, explicit environment configuration, and model endpoints you control. There is no required cloud runtime, Secret Manager, workload identity, or managed Pub/Sub dependency.
