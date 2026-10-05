@@ -1,5 +1,13 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS build
 WORKDIR /app
+# chora-contracts is a sibling path dependency (pyproject: path = "../chora-contracts").
+# It is supplied as a named build context and staged at /chora-contracts so the
+# relative path resolves inside the image. Only the files the wheel needs are
+# copied: the pyproject, src/chora_contracts, and gen/python (force-included as
+# chora_contracts_gen).
+COPY --from=chora-contracts pyproject.toml /chora-contracts/pyproject.toml
+COPY --from=chora-contracts src /chora-contracts/src
+COPY --from=chora-contracts gen/python /chora-contracts/gen/python
 COPY pyproject.toml ./
 RUN uv sync --no-dev --no-install-project
 COPY . .
