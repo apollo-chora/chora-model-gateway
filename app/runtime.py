@@ -261,8 +261,9 @@ class Runtime:
         grounded: bool,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
-        if isinstance(messages, list) and messages:
-            body["messages"] = messages
+        normalized = self._normalize_chat_messages(messages) if isinstance(messages, list) else []
+        if normalized:
+            body["messages"] = normalized
         else:
             chat_messages: list[dict[str, Any]] = []
             if system:
@@ -275,6 +276,37 @@ class Runtime:
             body["tools"] = list(body.get("tools") or []) + [self._grounding_tool(spec.grounding, "chat_completions")]
         self._apply_generation_config(body, params)
         return body
+
+    @staticmethod
+    def _normalize_chat_messages(messages: list[Any]) -> list[dict[str, Any]]:
+        """Coerce ADK/genai-shaped entries into the OpenAI chat shape.
+
+        The Go client sends ``contents_json`` as genai ``[]*Content``
+        (``{"role": "user", "parts": [{"text": ...}]}``) because that is what
+        the gemini adapter consumes. The OpenAI chat surface expects
+        ``content``, so forwarding those entries verbatim makes the provider
+        reject the whole request with ``Missing required parameter:
+        messages[0].content``. Entries that carry neither shape — or whose text
+        is empty — are dropped so the caller falls back to the flat prompt.
+        """
+        out: list[dict[str, Any]] = []
+        for entry in messages:
+            if not isinstance(entry, dict):
+                continue
+            if isinstance(entry.get("content"), (str, list)) and entry.get("content"):
+                out.append(entry)
+                continue
+            parts = entry.get("parts")
+            if not isinstance(parts, list):
+                continue
+            text = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
+            if not text:
+                continue
+            role = str(entry.get("role") or "user")
+            if role == "model":  # genai names the assistant turn "model"
+                role = "assistant"
+            out.append({"role": role, "content": text})
+        return out
 
     def _apply_generation_config(self, body: dict[str, Any], cfg: dict[str, Any]) -> None:
         for key, value in cfg.items():

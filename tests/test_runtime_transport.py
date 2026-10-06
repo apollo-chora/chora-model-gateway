@@ -51,6 +51,61 @@ async def test_default_transport_builds_the_chat_request():
 
 
 @pytest.mark.anyio
+async def test_genai_shaped_contents_are_normalized_for_chat():
+    """The Go client sends genai `[]*Content` ({role, parts:[{text}]}) in
+    contents_json. Forwarded verbatim the provider rejects the request with
+    "Missing required parameter: messages[0].content", so the chat builder must
+    convert them to {role, content}."""
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    contents = [
+        {"role": "user", "parts": [{"text": "BEGIN"}]},
+        {"role": "model", "parts": [{"text": "prior answer"}]},
+    ]
+    await runtime.generate(spec, "BEGIN", "", contents)
+    body = json.loads(client.post.call_args[1]["content"])
+    assert body["messages"] == [
+        {"role": "user", "content": "BEGIN"},
+        {"role": "assistant", "content": "prior answer"},
+    ]
+
+
+@pytest.mark.anyio
+async def test_contentless_messages_fall_back_to_the_flat_prompt():
+    """A genai entry whose parts carry no text must not be forwarded as a
+    content-less message; the flat prompt is the correct fallback."""
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    await runtime.generate(spec, "real prompt", "", [{"role": "user", "parts": [{"text": ""}]}])
+    body = json.loads(client.post.call_args[1]["content"])
+    assert body["messages"] == [{"role": "user", "content": "real prompt"}]
+
+
+@pytest.mark.anyio
 async def test_default_transport_relays_upstream_errors():
     spec = make_spec()
     runtime = Runtime(post=None)
