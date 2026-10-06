@@ -255,3 +255,83 @@ async def test_default_transport_embed():
     assert model == "embedder-upstream"
     _, kwargs = client.post.call_args
     assert json.loads(kwargs["content"])["dimensions"] == 256
+
+
+@pytest.mark.anyio
+async def test_file_data_part_is_fetched_and_sent_as_a_file_part(monkeypatch):
+    """The grounding plugin attaches the batch material as a genai `fileData`
+    (s3:// URI) part and the gateway is the component that dereferences it — no
+    provider can fetch an s3:// URI. A PDF must arrive as an OpenAI `file` part
+    with a data URL."""
+    import app.runtime as runtime_mod
+
+    monkeypatch.setattr(runtime_mod, "_fetch_object", lambda uri: b"%PDF-1.4 fake")
+
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "Generate 2 MCQs."},
+                {
+                    "fileData": {
+                        "fileUri": "s3://chora-batch-uploads/tenants/t/jobs/j/source",
+                        "mimeType": "application/pdf",
+                    }
+                },
+            ],
+        }
+    ]
+    await runtime.generate(spec, "Generate 2 MCQs.", "", contents)
+    body = json.loads(client.post.call_args[1]["content"])
+    msg = body["messages"][0]
+    assert msg["content"][0] == {"type": "text", "text": "Generate 2 MCQs."}
+    file_part = msg["content"][1]
+    assert file_part["type"] == "file"
+    assert file_part["file"]["file_data"].startswith("data:application/pdf;base64,")
+
+
+@pytest.mark.anyio
+async def test_inline_image_part_becomes_an_image_url(monkeypatch):
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "What is shown?"},
+                {"inlineData": {"mimeType": "image/png", "data": "aGk="}},
+            ],
+        }
+    ]
+    await runtime.generate(spec, "What is shown?", "", contents)
+    body = json.loads(client.post.call_args[1]["content"])
+    assert body["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,aGk="},
+    }

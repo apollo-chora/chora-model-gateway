@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,6 +12,8 @@ import httpx
 
 from .config import GroundingSpec, ModelSpec
 
+logger = logging.getLogger(__name__)
+
 PostFn = Callable[[str, dict[str, Any], dict[str, str]], Awaitable[dict[str, Any]]]
 FetchFn = Callable[[str], Awaitable[tuple[bytes, str]]]
 
@@ -17,6 +21,55 @@ FINISH_COMPLETE = "complete"
 FINISH_MAX_TOKENS = "max_tokens"
 FINISH_VENDOR_ERROR = "vendor_error"
 FINISH_UNSPECIFIED = "unspecified"
+
+
+def _attachment_for_bytes(mime: str, b64: str, uri: str) -> dict[str, Any]:
+    """Build the OpenAI content part for a fetched grounding blob.
+
+    Images ride as ``image_url`` data URLs; everything else rides as a ``file``
+    part (OpenRouter/OpenAI accept ``data:`` URLs there, which is how a PDF
+    reaches a multimodal model without the provider needing object-store
+    access).
+    """
+    kind = (mime or "").split(";")[0].strip().lower()
+    if kind.startswith("image/"):
+        return {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{b64}"}}
+    name = uri.rsplit("/", 1)[-1] if uri else "material"
+    if not name:
+        name = "material"
+    if kind:
+        name = f"{name}.{kind.split('/')[-1]}" if "." not in name else name
+    return {
+        "type": "file",
+        "file": {"filename": name, "file_data": f"data:{kind or 'application/octet-stream'};base64,{b64}"},
+    }
+
+
+def _fetch_object(uri: str) -> bytes:
+    """Fetch an ``s3://bucket/key`` object (the deployment's object store).
+
+    Runs in a worker thread — boto3 is synchronous. Credentials come from the
+    standard S3_* env the rest of the stack uses.
+    """
+    import os
+
+    import boto3  # lazy: keeps the test path SDK-free
+
+    if not uri.startswith("s3://"):
+        raise ValueError(f"unsupported object uri: {uri}")
+    rest = uri[len("s3://") :]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        raise ValueError(f"malformed object uri: {uri}")
+    client = boto3.client(
+        "s3",
+        endpoint_url=os.getenv("S3_ENDPOINT") or None,
+        aws_access_key_id=os.getenv("S3_ACCESS_KEY_ID") or os.getenv("S3_ACCESS_KEY") or None,
+        aws_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("S3_SECRET_KEY") or None,
+        region_name=os.getenv("S3_REGION") or "us-east-1",
+    )
+    obj = client.get_object(Bucket=bucket, Key=key)
+    return obj["Body"].read()
 
 
 class ProviderError(Exception):
@@ -250,7 +303,7 @@ class Runtime:
     def _chat_url(self, spec: ModelSpec) -> str:
         return _resolve_endpoint(spec.base_url, spec.chat_completions_path, "/chat/completions")
 
-    def _build_chat_body(
+    async def _build_chat_body(
         self,
         spec: ModelSpec,
         prompt: str,
@@ -261,7 +314,9 @@ class Runtime:
         grounded: bool,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
-        normalized = self._normalize_chat_messages(messages) if isinstance(messages, list) else []
+        normalized = (
+            await self._normalize_chat_messages(messages) if isinstance(messages, list) else []
+        )
         if normalized:
             body["messages"] = normalized
         else:
@@ -277,17 +332,22 @@ class Runtime:
         self._apply_generation_config(body, params)
         return body
 
-    @staticmethod
-    def _normalize_chat_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    async def _normalize_chat_messages(self, messages: list[Any]) -> list[dict[str, Any]]:
         """Coerce ADK/genai-shaped entries into the OpenAI chat shape.
 
         The Go client sends ``contents_json`` as genai ``[]*Content``
-        (``{"role": "user", "parts": [{"text": ...}]}``) because that is what
-        the gemini adapter consumes. The OpenAI chat surface expects
-        ``content``, so forwarding those entries verbatim makes the provider
-        reject the whole request with ``Missing required parameter:
-        messages[0].content``. Entries that carry neither shape — or whose text
-        is empty — are dropped so the caller falls back to the flat prompt.
+        (``{"role": "user", "parts": [...]}``) because that is what the gemini
+        adapter consumes. The OpenAI chat surface expects ``content``, so
+        forwarding those entries verbatim makes the provider reject the whole
+        request with ``Missing required parameter: messages[0].content``.
+
+        Parts are translated rather than dropped: the grounding plugin attaches
+        the uploaded batch material as a ``fileData`` (object-store URI) part and
+        the grounding contract is that THIS gateway dereferences it (see
+        chora-adk-common/groundingplugin) — no provider can fetch an ``s3://``
+        URI. Images become ``image_url`` data URLs, documents become ``file``
+        parts, and text-bearing material is inlined as text. Entries with no
+        usable part are dropped so the caller falls back to the flat prompt.
         """
         out: list[dict[str, Any]] = []
         for entry in messages:
@@ -300,12 +360,44 @@ class Runtime:
             if not isinstance(parts, list):
                 continue
             text = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
-            if not text:
+            attachments = await self._attachments_from_parts(parts)
+            if not text and not attachments:
                 continue
             role = str(entry.get("role") or "user")
             if role == "model":  # genai names the assistant turn "model"
                 role = "assistant"
-            out.append({"role": role, "content": text})
+            if attachments:
+                content: Any = ([{"type": "text", "text": text}] if text else []) + attachments
+            else:
+                content = text
+            out.append({"role": role, "content": content})
+        return out
+
+    async def _attachments_from_parts(self, parts: list[Any]) -> list[dict[str, Any]]:
+        """Translate genai ``inlineData`` / ``fileData`` parts into OpenAI
+        content parts, fetching object-store URIs on the way."""
+        out: list[dict[str, Any]] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            inline = part.get("inlineData") or part.get("inline_data")
+            filedata = part.get("fileData") or part.get("file_data")
+            if isinstance(inline, dict):
+                mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
+                data = str(inline.get("data") or "")
+                if data:
+                    out.append(_attachment_for_bytes(mime, data, ""))
+            elif isinstance(filedata, dict):
+                uri = str(filedata.get("fileUri") or filedata.get("file_uri") or "")
+                mime = str(filedata.get("mimeType") or filedata.get("mime_type") or "")
+                if not uri:
+                    continue
+                try:
+                    raw = await asyncio.to_thread(_fetch_object, uri)
+                except Exception:  # noqa: BLE001 — a missing blob must not kill the call
+                    logger.warning("grounding.object_fetch_failed", extra={"uri": uri})
+                    continue
+                out.append(_attachment_for_bytes(mime, base64.b64encode(raw).decode("ascii"), uri))
         return out
 
     def _apply_generation_config(self, body: dict[str, Any], cfg: dict[str, Any]) -> None:
@@ -350,7 +442,7 @@ class Runtime:
         traceparent: str = "",
         tracestate: str = "",
     ) -> Result:
-        body = self._build_chat_body(spec, prompt, system, messages, tools, params, grounded)
+        body = await self._build_chat_body(spec, prompt, system, messages, tools, params, grounded)
         raw = await self._dispatch(spec, self._chat_url(spec), body, traceparent, tracestate)
         return self._chat_to_result(spec, raw)
 
