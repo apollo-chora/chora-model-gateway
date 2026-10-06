@@ -263,6 +263,13 @@ class Runtime:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
         normalized = self._normalize_chat_messages(messages) if isinstance(messages, list) else []
         if normalized:
+            # The caller's `system` is the ADK agent's whole instruction (ADK
+            # routes InstructionProvider output through SystemInstruction, and
+            # the Go client forwards it in the separate `system` field). Dropping
+            # it because `messages` is present makes the model see only the
+            # trigger turn and answer it literally.
+            if system and not any(m.get("role") == "system" for m in normalized):
+                normalized = [{"role": "system", "content": system}, *normalized]
             body["messages"] = normalized
         else:
             chat_messages: list[dict[str, Any]] = []

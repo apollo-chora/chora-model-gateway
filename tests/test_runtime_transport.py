@@ -106,6 +106,32 @@ async def test_contentless_messages_fall_back_to_the_flat_prompt():
 
 
 @pytest.mark.anyio
+async def test_system_instruction_is_kept_when_messages_are_present():
+    """ADK routes the agent's InstructionProvider output through
+    SystemInstruction, which the Go client forwards in the separate `system`
+    field. A request that also carries `messages` must still send it, or the
+    model sees only the trigger turn and answers it literally."""
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    await runtime.generate(spec, "BEGIN", "You are a question generator.", [{"role": "user", "parts": [{"text": "BEGIN"}]}])
+    body = json.loads(client.post.call_args[1]["content"])
+    assert body["messages"][0] == {"role": "system", "content": "You are a question generator."}
+    assert body["messages"][1] == {"role": "user", "content": "BEGIN"}
+
+
+@pytest.mark.anyio
 async def test_default_transport_relays_upstream_errors():
     spec = make_spec()
     runtime = Runtime(post=None)
