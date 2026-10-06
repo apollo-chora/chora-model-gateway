@@ -47,6 +47,18 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
 
     async def Invoke(self, request: Any, context: Any) -> Any:
         try:
+            # The agent's instruction (ADK's InstructionProvider output) arrives
+            # in `system_prompt`. The OpenAI chat surface drops a bare `system`
+            # field whenever `messages` is present — deliberately, so the public
+            # /v1/chat/completions surface cannot be handed a client system
+            # prompt. This path is trusted internal traffic, so carry the
+            # instruction as an explicit system message instead: without it the
+            # model sees only the trigger turn and answers it literally.
+            contents = _decode_json(request.contents_json)
+            if not isinstance(contents, list):
+                contents = []
+            if request.system_prompt:
+                contents = [{"role": "system", "content": request.system_prompt}, *contents]
             response = await self.gateway.invoke(
                 {
                     "invocation_id": request.invocation_id,
@@ -56,7 +68,7 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
                     "logical_model_id": request.logical_model_id,
                     "prompt": request.prompt,
                     "system": request.system_prompt,
-                    "messages": _decode_json(request.contents_json),
+                    "messages": contents,
                     "tools": _decode_json(request.tools_json),
                     "params": (
                         MessageToDict(request.generation_config, preserving_proto_field_name=True)

@@ -127,8 +127,44 @@ async def test_system_instruction_is_kept_when_messages_are_present():
 
     await runtime.generate(spec, "BEGIN", "You are a question generator.", [{"role": "user", "parts": [{"text": "BEGIN"}]}])
     body = json.loads(client.post.call_args[1]["content"])
-    assert body["messages"][0] == {"role": "system", "content": "You are a question generator."}
-    assert body["messages"][1] == {"role": "user", "content": "BEGIN"}
+    # The bare `system` field is ignored when messages are present (the public
+    # HTTP surface relies on that); the trusted gRPC path carries the
+    # instruction as an explicit system message instead (see grpc_server).
+    assert body["messages"] == [{"role": "user", "content": "BEGIN"}]
+
+
+@pytest.mark.anyio
+async def test_system_role_message_in_contents_is_forwarded():
+    """The gRPC path prepends the agent instruction as a system-role entry;
+    that entry has `content` and must survive normalization."""
+    spec = make_spec()
+    runtime = Runtime(post=None)
+    response = mock.Mock()
+    response.status_code = 200
+    response.text = "{}"
+    response.json.return_value = {
+        "id": "c",
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    client = stub_transport(response)
+    runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
+
+    await runtime.generate(
+        spec,
+        "BEGIN",
+        "",
+        [
+            {"role": "system", "content": "You are a question generator."},
+            {"role": "user", "parts": [{"text": "BEGIN"}]},
+        ],
+    )
+    body = json.loads(client.post.call_args[1]["content"])
+    assert body["messages"] == [
+        {"role": "system", "content": "You are a question generator."},
+        {"role": "user", "content": "BEGIN"},
+    ]
 
 
 @pytest.mark.anyio
