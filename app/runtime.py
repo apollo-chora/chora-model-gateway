@@ -313,9 +313,7 @@ class Runtime:
         grounded: bool,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"model": spec.model, "stream": False}
-        normalized = (
-            await self._normalize_chat_messages(messages) if isinstance(messages, list) else []
-        )
+        normalized = await self._normalize_chat_messages(messages) if isinstance(messages, list) else []
         if normalized:
             body["messages"] = normalized
         else:

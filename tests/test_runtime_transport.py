@@ -121,7 +121,9 @@ async def test_system_instruction_is_kept_when_messages_are_present():
     client = stub_transport(response)
     runtime._transport._client = lambda *_a, **_k: client  # type: ignore[method-assign]
 
-    await runtime.generate(spec, "BEGIN", "You are a question generator.", [{"role": "user", "parts": [{"text": "BEGIN"}]}])
+    await runtime.generate(
+        spec, "BEGIN", "You are a question generator.", [{"role": "user", "parts": [{"text": "BEGIN"}]}]
+    )
     body = json.loads(client.post.call_args[1]["content"])
     # The bare `system` field is ignored when messages are present (the public
     # HTTP surface relies on that); the trusted gRPC path carries the

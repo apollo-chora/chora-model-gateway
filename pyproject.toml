@@ -64,6 +64,14 @@ show_error_codes = true
 module = ["asyncpg.*", "blacksheep.*"]
 ignore_missing_imports = true
 
+# boto3 ships without a py.typed marker, so mypy refuses to analyse it. It is
+# imported lazily inside the grounding blob-fetch path (app/runtime.py) purely
+# to read the object store, and the test path never imports it.
+[[tool.mypy.overrides]]
+module = ["boto3.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
 # The protobuf stubs are generated at build time and are not present in the
 # source tree. When they are absent mypy cannot find the module; when they
 # present their classes are injected dynamically. Both cases are handled here.

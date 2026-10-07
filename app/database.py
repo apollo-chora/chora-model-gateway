@@ -12,8 +12,10 @@ from .contracts import EventEnvelope, TokenUsageRecorded
 
 SOURCE_SERVICE = "chora-model-gateway"
 SCHEMA_VERSION = 1
-TOKEN_USAGE_EVENT_TYPE = "chora.observability.token_usage.recorded.v1"
-TOKEN_USAGE_TOPIC = "chora.observability.token_usage.recorded.v1"
+# Bandit's B105 heuristic matches the word "TOKEN" in the constant NAME; these
+# are NATS event type/topic identifiers, not credentials.
+TOKEN_USAGE_EVENT_TYPE = "chora.observability.token_usage.recorded.v1"  # nosec B105
+TOKEN_USAGE_TOPIC = "chora.observability.token_usage.recorded.v1"  # nosec B105
 
 
 def _is_uuid(value: str) -> bool:
