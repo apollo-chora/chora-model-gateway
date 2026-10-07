@@ -96,7 +96,6 @@ class Settings:
     default_tenant_id: str
     default_gcid: str
     default_agent_id: str
-    http_port: int
     grpc_port: int
     registry_path: str
     service_version: str
@@ -110,7 +109,6 @@ class Settings:
             default_tenant_id=tenant,
             default_gcid=os.getenv("CHORA_DEFAULT_GCID", tenant),
             default_agent_id=os.getenv("CHORA_DEFAULT_AGENT_ID", "openai_compat"),
-            http_port=int(os.getenv("CHORA_HTTP_PORT", "8080")),
             grpc_port=int(os.getenv("CHORA_GRPC_PORT", "9090")),
             registry_path=os.getenv("CHORA_MODEL_REGISTRY", "config/models.yaml"),
             service_version=os.getenv("SERVICE_VERSION", "chora-model-gateway:local"),

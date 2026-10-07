@@ -8,8 +8,6 @@ from typing import Any
 from .config import DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_MODEL_ID, ModelSpec
 from .runtime import Result, Runtime
 
-FINISH_BUDGET_BLOCK = "budget_block"
-
 
 class GatewayError(Exception):
     """A terminal invoke failure. Carries the transport status, the OpenAI

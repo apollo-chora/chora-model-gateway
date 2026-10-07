@@ -94,7 +94,6 @@ class Result:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
-    cache_write_tokens: int = 0
     cost: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
@@ -770,7 +769,6 @@ class Runtime:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached,
-            cache_write_tokens=cache_writes,
             cost=spec.cost_micros(plain_input - cached, output_tokens, cached, cache_writes),
             finish=FINISH_COMPLETE,
         )

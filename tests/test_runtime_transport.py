@@ -11,10 +11,6 @@ from app.runtime import ProviderError, Runtime
 from tests.conftest import make_spec
 
 
-def make_response(status: int, payload: dict) -> httpx.Response:
-    return httpx.Response(status, json=payload)
-
-
 def stub_transport(response: httpx.Response | None = None, status: int = 200, payload: dict | None = None):
     """Replace the runtime's HTTP transport with a stubbed httpx client."""
     if response is None:
