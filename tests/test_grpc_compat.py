@@ -127,6 +127,49 @@ async def test_invoke_malformed_contents_json_degrades_gracefully(grpc_channel):
 
 
 @pytest.mark.anyio
+async def test_invoke_flat_prompt_with_system_keeps_the_user_turn(grpc_channel, provider):
+    # Regression (api.meta.ai, 2026-10-07). With `contents_json` empty the user
+    # turn IS the flat `prompt`. Prepending the system turn to an EMPTY
+    # `messages` list made it non-empty, so the chat builder preferred it over
+    # `prompt` and the request went out system-only. OpenAI tolerates a
+    # system-only list; api.meta.ai rejects it with "`messages` must contain at
+    # least one message with role `user` or `tool`".
+    await call(
+        grpc_channel,
+        tenant_id="t",
+        gcid="g",
+        agent_id="a",
+        logical_model_id="chatty",
+        prompt="critique this candidate",
+        system_prompt="You are the Critic agent.",
+    )
+    _, payload, _, _ = provider.last
+    assert payload["messages"] == [
+        {"role": "system", "content": "You are the Critic agent."},
+        {"role": "user", "content": "critique this candidate"},
+    ]
+
+
+@pytest.mark.anyio
+async def test_invoke_structured_contents_still_gets_the_system_turn_prepended(grpc_channel, provider):
+    await call(
+        grpc_channel,
+        tenant_id="t",
+        gcid="g",
+        agent_id="a",
+        logical_model_id="chatty",
+        prompt="ignored when contents_json is present",
+        system_prompt="You are the Critic agent.",
+        contents_json='[{"role":"user","content":"hi"}]',
+    )
+    _, payload, _, _ = provider.last
+    assert payload["messages"] == [
+        {"role": "system", "content": "You are the Critic agent."},
+        {"role": "user", "content": "hi"},
+    ]
+
+
+@pytest.mark.anyio
 async def test_invoke_fallback_ids(grpc_channel, provider, models):
     # The primary fails; the caller-declared fallback (on its own host) answers.
     models["textonly"] = make_models()["textonly"]

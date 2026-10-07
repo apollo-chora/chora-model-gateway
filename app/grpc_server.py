@@ -54,10 +54,19 @@ class ModelGateway(pbg.ModelGatewayServiceServicer):
             # prompt. This path is trusted internal traffic, so carry the
             # instruction as an explicit system message instead: without it the
             # model sees only the trigger turn and answers it literally.
+            #
+            # ONLY when there is a structured conversation to prepend to. With
+            # `contents_json` empty the user turn is the flat `prompt`, and both
+            # builders (`_build_chat_body`, `_build_responses_body`) prefer a
+            # non-empty `messages` over `prompt` — so prepending the system turn
+            # to an EMPTY list made `messages` non-empty and silently DROPPED the
+            # user turn, leaving a system-only request. OpenAI tolerates that;
+            # api.meta.ai rejects it outright (`messages` must contain at least
+            # one message with role `user` or `tool`).
             contents = _decode_json(request.contents_json)
             if not isinstance(contents, list):
                 contents = []
-            if request.system_prompt:
+            if request.system_prompt and contents:
                 contents = [{"role": "system", "content": request.system_prompt}, *contents]
             response = await self.gateway.invoke(
                 {
