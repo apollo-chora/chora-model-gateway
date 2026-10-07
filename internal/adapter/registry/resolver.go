@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
-	modelregistry "github.com/5007-Capstone/chora/services/chora-model-gateway/internal/registry"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
+	modelregistry "github.com/apollo-chora/chora-model-gateway/internal/registry"
 )
 
 // Resolver adapts a modelregistry.Registry to the domain.ModelResolver port.

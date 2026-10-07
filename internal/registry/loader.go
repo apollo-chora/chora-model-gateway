@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // ConfigError is a registry/deployment misconfiguration. The loader returns

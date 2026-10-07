@@ -29,7 +29,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // SuspensionVerdict is the result of one uncached containment read.

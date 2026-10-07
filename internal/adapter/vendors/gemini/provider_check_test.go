@@ -3,8 +3,8 @@ package gemini_test
 import (
 	"testing"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/adapter/vendors/gemini"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/gemini"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // Compile-time checks that gemini.Provider implements domain.CapabilityProvider

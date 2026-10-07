@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // ADR-177 — when ContentsJSON is present the body is built from it (multi-turn,

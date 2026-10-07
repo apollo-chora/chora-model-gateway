@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // TokenProvider mirrors the gemini adapter's port — short-lived OAuth2

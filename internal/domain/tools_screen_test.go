@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // CHO-2391. `tools_json` reaches the gateway from the caller and is screened by

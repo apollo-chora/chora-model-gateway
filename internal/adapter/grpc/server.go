@@ -25,8 +25,8 @@ import (
 	"github.com/5007-Capstone/chora/libs/chora-go-common/tracing"
 	mgv1 "github.com/apollo-chora/chora-contracts/gen/go/chora/services/model_gateway/v1"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/executor"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/executor"
 )
 
 // Invoker is the subset of the Executor the adapter calls. The Executor

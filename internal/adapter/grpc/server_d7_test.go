@@ -20,8 +20,8 @@ import (
 
 	mgv1 "github.com/apollo-chora/chora-contracts/gen/go/chora/services/model_gateway/v1"
 
-	modelgatewaygrpc "github.com/5007-Capstone/chora/services/chora-model-gateway/internal/adapter/grpc"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	modelgatewaygrpc "github.com/apollo-chora/chora-model-gateway/internal/adapter/grpc"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package registry_test
 import (
 	"testing"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/registry"
+	"github.com/apollo-chora/chora-model-gateway/internal/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

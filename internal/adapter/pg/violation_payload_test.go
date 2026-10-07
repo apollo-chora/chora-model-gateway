@@ -14,7 +14,7 @@ import (
 	governancev1 "github.com/apollo-chora/chora-contracts/gen/go/chora/governance/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 func sampleViolation() domain.PolicyViolationEvent {

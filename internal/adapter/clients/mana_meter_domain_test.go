@@ -6,7 +6,7 @@ import (
 
 	identityv1 "github.com/apollo-chora/chora-contracts/gen/go/chora/services/identity/v1"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/adapter/clients"
+	"github.com/apollo-chora/chora-model-gateway/internal/adapter/clients"
 )
 
 // DomainManaMeter is a thin re-shape of ManaClient (middleware.* → domain.*)

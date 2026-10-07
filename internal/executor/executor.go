@@ -11,8 +11,8 @@ package executor
 import (
 	"context"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/adapter/middleware"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/adapter/middleware"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // ExecuteRequest is the transport-agnostic input to Executor.Execute.

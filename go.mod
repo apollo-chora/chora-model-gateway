@@ -1,4 +1,4 @@
-module github.com/5007-Capstone/chora/services/chora-model-gateway
+module github.com/apollo-chora/chora-model-gateway
 
 go 1.26.1
 

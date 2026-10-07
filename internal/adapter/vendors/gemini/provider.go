@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // Provider adapts Client to the domain.CapabilityProvider canonical interface

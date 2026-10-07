@@ -13,7 +13,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/adapter/middleware"
+	"github.com/apollo-chora/chora-model-gateway/internal/adapter/middleware"
 )
 
 // ClaimDebit: implements middleware.DebitClaimer.

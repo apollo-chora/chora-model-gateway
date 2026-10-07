@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
 )
 
 // G1'-1 (owner-ruled 2026-08-07): embeddings ride the chokepoint. The Embed

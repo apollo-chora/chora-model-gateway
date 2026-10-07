@@ -21,9 +21,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/domain"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/executor"
-	"github.com/5007-Capstone/chora/services/chora-model-gateway/internal/registry"
+	"github.com/apollo-chora/chora-model-gateway/internal/domain"
+	"github.com/apollo-chora/chora-model-gateway/internal/executor"
+	"github.com/apollo-chora/chora-model-gateway/internal/registry"
 )
 
 // Invoker is the subset of the Executor the HTTP handlers call. The Executor
