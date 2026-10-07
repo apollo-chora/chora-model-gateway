@@ -1,0 +1,71 @@
+# skaffold.yaml — Cloud Deploy rendering config for chora-model-gateway.
+#
+# Used by Cloud Deploy delivery-pipeline `chora-model-gateway-pipeline` at
+# the "render" stage. Image substitution happens automatically: the build
+# step emits the image:tag, Cloud Deploy injects it into the manifests at
+# deploy time via the `images` field.
+#
+# Per-target profiles select the namespace overlay:
+#   dev  → services/chora-model-gateway/clouddeploy/dev/  (namespace: ai-kernel-dev)
+#   prod → services/chora-model-gateway/clouddeploy/prod/ (namespace: ai-kernel)
+#
+# Top-level `verify` block — per chora-notifications pilot (2026-05-24)
+# skaffold v4beta11 does NOT honour profile-level `verify` (silent
+# `verifyJob.state=DISABLED`). Verify configured on dev only at the
+# pipeline level (chora-infra/clouddeploy/pipelines/...). Short hostname
+# `chora-model-gateway:9090` resolves via cluster DNS in the verify Job's
+# target namespace.
+#
+# Canonical smoke: `grpc.health.v1.Health/Check` on port :9090 (ADR-140
+# canonical gRPC port). chora-model-gateway main.go registers the gRPC
+# Health server (gateway's cmd/server/main.go via the grpc-go health
+# helper) but does NOT register gRPC server-reflection — grpcurl would
+# fail closed on this server. `grpc-health-probe v0.4.24` calls
+# grpc.health.v1.Health/Check natively over the wire without needing
+# reflection. Same canonical fix that landed Wave-2 (see
+# docs/cicd/evidence/chora-identity-dashboard-2026-05-24.md "Verify-Job
+# swap" + handoff docs/m15/handoff-model-gateway-cicd-bring-up-2026-05-26.md §2.2).
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: chora-model-gateway
+
+verify:
+  # Timeout bumped 120s → 240s 2026-05-26 to absorb GKE Autopilot cold-start
+  # (new node provisioning ~60-90s + istio sidecar inject ~30s). The 120s
+  # default broke the dev-rollout-#2 verify on a freshly-provisioned
+  # ai-kernel-dev namespace where no warm capacity was scheduled.
+  - name: grpc-health-smoke
+    timeout: 240
+    container:
+      name: grpc-health-smoke
+      # `grpc-health-probe` calls grpc.health.v1.Health/Check natively over
+      # the wire — does NOT require gRPC server-reflection. chora-model-gateway
+      # registers Health but NOT reflection.Register; grpcurl would fail
+      # closed on this server.
+      image: ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.24
+      args:
+        - "-addr=chora-model-gateway:9090"
+        - "-rpc-timeout=10s"
+        - "-connect-timeout=5s"
+    executionMode:
+      kubernetesCluster: {}
+
+  # NOTE 2026-05-26: the grpc-sustained-smoke 2nd verify container was
+  # REMOVED after its 1st execution attempt failed Autopilot scheduling
+  # (alpine + wget required 100m CPU defaulted by Autopilot mutator, which
+  # didn't fit on existing nodes → triggered cluster-autoscaler scale-up
+  # that exceeded the 60s timeout). Sustained-RPS / DAST-style coverage
+  # belongs in a proper k6 sidecar via M14 BLANKET resilience battery, NOT
+  # bolted into the Cloud Deploy verify block. File as M15.4 follow-up.
+
+profiles:
+  - name: prod
+    manifests:
+      kustomize:
+        paths:
+          - prod
+    deploy:
+      kubectl:
+        defaultNamespace: ai-kernel
+      statusCheckDeadlineSeconds: 1800

@@ -1,0 +1,117 @@
+# Test registry for internal/registry tests. Mirrors the shape of the
+# Python reference config/models.yaml: every entry declares id, provider,
+# base_url and the dispatch-relevant knobs.
+models:
+  - id: gpt-4o
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision, embeddings]
+    pricing:
+      input_per_mtok_usd_micros: 2500000
+      output_per_mtok_usd_micros: 10000000
+
+  - id: gpt-4o-mini
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision]
+    pricing:
+      input_per_mtok_usd_micros: 150000
+      output_per_mtok_usd_micros: 600000
+
+  # A cheap model with an expensive one behind it.
+  - id: chora-fast
+    provider: openai
+    upstream_model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools]
+    fallback_ids: [gpt-4o]
+    aliases: [fast, quick]
+
+  # Image generation — priced per call, so the token table is zero.
+  - id: gpt-image-1
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    capabilities: [image]
+    pricing: {}
+
+  # Self-hosted: no credential, which is what an absent api_key_env
+  # expresses.
+  - id: local-llama
+    provider: openai
+    upstream_model: llama3.1:8b
+    base_url: http://host.docker.internal:11434/v1
+    context_window: 8192
+    max_output_tokens: 4096
+    capabilities: [chat, tools]
+    extra_headers:
+      X-Tenant: chora
+
+  # A fully custom chat-completions endpoint: base_url is ignored for this
+  # surface because chat_completions_path is absolute.
+  - id: internal-llm
+    provider: openai
+    upstream_model: chora-sg-academic
+    base_url: https://llm.internal.example.com/v1
+    chat_completions_path: https://llm.internal.example.com/generate
+    api_key_env: INTERNAL_LLM_KEY
+    context_window: 8192
+    max_output_tokens: 2048
+    capabilities: [chat]
+
+  - id: claude-sonnet-5
+    provider: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    context_window: 200000
+    max_output_tokens: 8192
+    capabilities: [chat, tools, vision]
+    pricing:
+      input_per_mtok_usd_micros: 3000000
+      output_per_mtok_usd_micros: 15000000
+
+  # Grounded models — hosted web search. The block says which wire shape
+  # this provider speaks; with the block omitted the defaults follow the
+  # provider family.
+  - id: gpt-4o-search
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    context_window: 128000
+    max_output_tokens: 16384
+    capabilities: [chat, tools, vision, web_search]
+    grounding:
+      surface: responses
+      tool_type: web_search
+    pricing:
+      input_per_mtok_usd_micros: 2500000
+      output_per_mtok_usd_micros: 10000000
+
+  - id: claude-sonnet-5-search
+    provider: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    context_window: 200000
+    max_output_tokens: 8192
+    capabilities: [chat, tools, vision, web_search]
+    grounding:
+      surface: messages
+      tool_type: web_search_20250305
+      tool_name: web_search
+      max_uses: 5
+
+  # Embeddings surface.
+  - id: text-embedding-004
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    capabilities: [embeddings]

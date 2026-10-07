@@ -1,0 +1,69 @@
+# cloudbuild.yaml — chora-model-gateway minimal build + push (M15 / ADR-163)
+#
+# Phase 2.5 scope: this pipeline ONLY builds + pushes the linux/amd64 image
+# to Artifact Registry. Full CICD (lint / unit-test / SAST / SCA / IaC scan /
+# Trivy / cosign / Cloud Deploy release) lands in a Phase 4 follow-up once
+# the gateway is LIVE + verified. Mirrors the chora-creation cloudbuild.yaml
+# canonical shape for steps 6–7 only.
+#
+# Aligned with:
+#   .claude/skills/infra-gcp-compute/SKILL.md  (Cloud Build + AR patterns)
+#   feedback_buildx_platform_amd64             (--platform=linux/amd64 mandatory)
+#   feedback_cicd_no_mass_trip                 (trigger stays DISABLED; user
+#                                               trips via gcloud builds submit)
+#
+# Invocation (manual, NOT via trigger):
+#
+#   gcloud builds submit \
+#     --config=services/chora-model-gateway/cloudbuild.yaml \
+#     --project=chora-489812 \
+#     --substitutions=_SHORT_SHA=$(git rev-parse --short HEAD) \
+#     .
+#
+# Runtime SA: chora-cicd-svc@chora-489812.iam.gserviceaccount.com (Phase 1
+# grant: artifactregistry.writer + container.developer).
+
+substitutions:
+  _SERVICE: chora-model-gateway
+  _AR_REPO: chora-services
+  _REGION: asia-southeast1
+  _PLATFORM_PROJECT: chora-489812
+  _SHORT_SHA: latest
+
+steps:
+  # ── Docker buildx (linux/amd64 mandatory) ────────────────────────────────
+  - id: docker-build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        IMAGE="${_REGION}-docker.pkg.dev/${_PLATFORM_PROJECT}/${_AR_REPO}/${_SERVICE}"
+        BUILD_TIME=$$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        docker buildx create --use --name chora-builder >/dev/null 2>&1 || true
+        docker buildx build \
+          --platform=linux/amd64 \
+          -f services/${_SERVICE}/Dockerfile \
+          --build-arg SERVICE_NAME=${_SERVICE} \
+          --build-arg GIT_SHA=${_SHORT_SHA} \
+          --build-arg BUILD_TIME=$${BUILD_TIME} \
+          -t "$${IMAGE}:${_SHORT_SHA}" \
+          -t "$${IMAGE}:latest" \
+          --push \
+          .
+
+images:
+  - asia-southeast1-docker.pkg.dev/chora-489812/chora-services/chora-model-gateway:${_SHORT_SHA}
+  - asia-southeast1-docker.pkg.dev/chora-489812/chora-services/chora-model-gateway:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: "1200s"
+
+tags:
+  - chora
+  - service-chora-model-gateway
+  - phase-2.5-minimal

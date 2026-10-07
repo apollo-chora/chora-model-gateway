@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/govulncheck-baseline",
+  "version": "1.0",
+  "service": "chora-model-gateway",
+  "captured_at": "2026-05-26T01:55:01Z",
+  "captured_at_sha": "5cbe49c",
+  "captured_at_build_id": "a0bb71cf-9bbd-4597-bfd1-b6ba72661b71",
+  "directive": "no-debts baseline per user directive 2026-05-26",
+  "mode": "delta-gate",
+  "rationale": "These 20 OSV IDs are known function-level-reachable vulnerabilities in transitive dependencies. They were ADVISORY exit-0 on every model-gateway build until this audit. The baseline + delta gate prevents NEW vulnerabilities from being introduced silently. The 20 entries themselves are explicit debts marked for remediation via Go module upgrade in a separate PR.",
+  "remediation_path": "Upgrade golang.org/x/crypto, golang.org/x/net, golang.org/x/sys to versions >= fixed_version listed below. Run go mod tidy; re-run govulncheck; expected post-upgrade count: 0.",
+  "remediation_owner": "chora-model-gateway maintainer (M15.5 follow-up CHO ticket — to be filed)",
+  "gate_semantics": {
+    "fail_on": "Any OSV ID found by govulncheck that is NOT in baseline_osvs[].id",
+    "pass_on": "Empty findings, OR findings whose OSV IDs are all in baseline_osvs[].id (even if count of finding records changes)",
+    "advisory_on": "Unused baseline_osvs entries (OSVs in baseline but not in current scan) — log only, do not fail"
+  },
+  "baseline_osvs": [
+    {"id": "GO-2026-5005", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking key constraints not enforced in golang.org/x/crypto/ssh/agent"},
+    {"id": "GO-2026-5006", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking agent constraints dropped when forwarding keys in golang.org/x/crypto/ssh/agent"},
+    {"id": "GO-2026-5013", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking byte arithmetic causes underflow and panic in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5014", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking bypass of certificate restrictions in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5015", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking server panic during CheckHostKey/Authenticate in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5016", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking memory leak when rejecting channels can lead to DoS in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5017", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking client can cause server deadlock on unexpected responses in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5018", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking pathological RSA/DSA parameters may cause DoS in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5019", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking bypass of FIDO/U2F security keys physical interaction in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5020", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking infinite loop on large channel writes in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5021", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking auth bypass via unenforced @revoked status in golang.org/x/crypto/ssh/knownhosts"},
+    {"id": "GO-2026-5023", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking VerifiedPublicKeyCallback permissions skip enforcement in golang.org/x/crypto/ssh"},
+    {"id": "GO-2026-5024", "fixed_version": "v0.30.0", "module": "golang.org/x/sys", "summary": "Invoking integer overflow in NewNTUnicodeString in golang.org/x/sys/windows"},
+    {"id": "GO-2026-5025", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking incorrect handling of namespaced elements in foreign content in golang.org/x/net/html"},
+    {"id": "GO-2026-5026", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking failure to reject ASCII-only Punycode-encoded labels in golang.org/x/net/idna"},
+    {"id": "GO-2026-5027", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking incorrect handling of HTML elements in foreign content in golang.org/x/net/html"},
+    {"id": "GO-2026-5028", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking denial of service when parsing arbitrary HTML in golang.org/x/net/html"},
+    {"id": "GO-2026-5029", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking incorrect handling of character references in DOCTYPE nodes in golang.org/x/net/html"},
+    {"id": "GO-2026-5030", "fixed_version": "v0.42.0", "module": "golang.org/x/net", "summary": "Invoking duplicate attributes can cause XSS in golang.org/x/net/html"},
+    {"id": "GO-2026-5033", "fixed_version": "v0.52.0", "module": "golang.org/x/crypto", "summary": "Invoking pathological inputs can lead to client panic in golang.org/x/crypto/ssh/agent"},
+    {"id": "GO-2026-5932", "fixed_version": "none (openpgp package deprecated wholesale; advisory has introduced=0 and no fix event)", "module": "golang.org/x/crypto", "summary": "x/crypto/openpgp unmaintained/unsafe-by-design advisory. Module-level require only: govulncheck symbol analysis shows zero call paths from model-gateway (verified in-container 2026-07-27, CHO-2371). No upgrade clears it; remediation is dropping the transitive requirement, tracked with the baseline's existing x/crypto debt."}
+  ]
+}

@@ -1,0 +1,21 @@
+# Cloud Deploy PROD overlay for chora-model-gateway.
+# Inherits from chora-infra/k8s/services/chora-model-gateway/ (base manifests).
+# Namespace stays as `ai-kernel` (the existing prod namespace shared with
+# chora-ai-kernel-orchestrator). Future prod-only hardening (PodDisruptionBudget
+# already present, stricter resource limits, NetworkPolicy variants) lands as
+# patches in this directory.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-kernel
+
+resources:
+  - ../../../../chora-infra/k8s/services/chora-model-gateway
+
+labels:
+  - includeSelectors: false
+    pairs:
+      chora.dev/env: prod
+
+# Image override is applied by Cloud Deploy at release time via the
+# `images:` field in `gcloud deploy releases create --images=...`.
