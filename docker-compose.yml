@@ -42,7 +42,4 @@ services:
       EMBEDDING_LLM_API_KEY: ${EMBEDDING_LLM_API_KEY:-}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-exa}
       EXA_API_KEY: ${EXA_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      META_API_KEY: ${META_API_KEY:-}
     volumes: ["./config/models.yaml:/app/config/models.yaml:ro"]
