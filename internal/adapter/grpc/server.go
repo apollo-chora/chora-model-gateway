@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/5007-Capstone/chora/libs/chora-go-common/tracing"
+	"github.com/apollo-chora/chora-common/tracing"
 	mgv1 "github.com/apollo-chora/chora-contracts/gen/go/chora/services/model_gateway/v1"
 
 	"github.com/apollo-chora/chora-model-gateway/internal/domain"

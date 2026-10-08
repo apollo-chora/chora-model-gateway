@@ -2,27 +2,27 @@
 
 ## About
 
-`chora-model-gateway` is a Python 3.13 service that presents Chora model access through OpenAI-compatible HTTP endpoints and the Chora `ModelGatewayService` gRPC contract. It resolves logical model IDs from environment-based role settings and `config/models.yaml`, dispatches to OpenAI-compatible or Anthropic-compatible upstreams, and supports text, image generation, embeddings, and hosted web search. The gateway also enforces tenant budgets and writes metered usage events to the `chora_observability` database's transactional outbox.
+`chora-model-gateway` is a Go service that presents Chora model access through OpenAI-compatible HTTP endpoints and the Chora `ModelGatewayService` gRPC contract. It resolves logical model IDs from environment-based role settings and `config/models.yaml`, dispatches to OpenAI-compatible, Anthropic, Gemini, or Vertex upstreams, and supports text, image generation, embeddings, and hosted web search. The gateway also enforces tenant budgets and writes metered usage events to the `chora_observability` database's transactional outbox.
 
 ## Quick start
 
 ### Prerequisites
 
-- Python 3.13
-- `uv`
+- Go 1.26+
 - Docker and Docker Compose for the containerized deployment
-- A checked-out sibling `chora-contracts` repository for local package installation and Docker builds
+- Checked-out sibling repositories for the `replace` directives in `go.mod`:
+  - `../chora-contracts` (generated gRPC stubs)
+  - `../chora-common` (shared library, module `github.com/apollo-chora/chora-common`)
 - A migrated `chora_observability` PostgreSQL database
 - Credentials for any upstream model providers you configure
 
-The repository's `pyproject.toml` declares `chora-contracts` as a path dependency at `../chora-contracts`. From the parent directory:
+From the parent directory:
 
 ```bash
 git clone https://github.com/apollo-chora/chora-model-gateway.git
 git clone https://github.com/apollo-chora/chora-contracts.git
+git clone https://github.com/apollo-chora/chora-common.git
 cd chora-model-gateway
-
-uv sync --all-groups
 ```
 
 For the Compose deployment:
@@ -65,6 +65,12 @@ curl http://localhost:8080/readyz
 curl http://localhost:8080/v1/models
 ```
 
+To run locally without Docker:
+
+```bash
+go run ./cmd/server
+```
+
 The gateway itself does not run PostgreSQL migrations. Its Compose configuration expects `chora_observability` to already exist and be migrated.
 
 ## Usage
@@ -85,8 +91,6 @@ The HTTP service listens on `8080` by default.
 | `POST` | `/v1/images/generations` | Image generation |
 | `POST` | `/v1/images/edits` | Image compatibility surface |
 | `POST` | `/v1/embeddings` | Embeddings |
-
-Streaming is not implemented. Requests with `"stream": true` return HTTP `501` with error code `streaming_unsupported`. Image responses are returned as `b64_json`; hosted image URLs are not returned by the gateway.
 
 A basic chat request:
 
@@ -111,8 +115,9 @@ Implemented RPCs:
 
 - `Invoke`
 - `Embed`
+- `GroundedSearch`
 
-The legacy `GroundedSearch` RPC is present in the service definition but returns `UNIMPLEMENTED`. Grounded requests should use `Invoke` with `response_modality=GROUNDED` or the HTTP `/v1/responses` endpoint.
+Grounded requests can also use `Invoke` with `response_modality=GROUNDED` or the HTTP `/v1/responses` endpoint.
 
 ### Model configuration
 
@@ -152,61 +157,43 @@ TEXT_LLM_SUPPORT_GROUNDING=false
 
 ## Development
 
-Install all dependencies, including development tools:
+Build the service:
 
 ```bash
-uv sync --all-groups
+go build ./cmd/server
 ```
 
-Generate the Python gRPC stubs before running checks:
+Run the quality checks:
 
 ```bash
-uv run python -m grpc_tools.protoc \
-  -Iproto \
-  --python_out=. \
-  --grpc_python_out=. \
-  proto/model_gateway_service.proto
+go build ./...
+go vet ./...
+go test ./...
 ```
-
-Run the same quality checks used by GitHub Actions:
-
-```bash
-uv run ruff check app tests
-uv run ruff format --check app tests
-uv run mypy
-uv run bandit -c pyproject.toml -r app
-uv run pytest --cov=app --cov-report=term-missing
-```
-
-Run the ASGI application locally with Granian:
-
-```bash
-uv run granian --interface asgi --host 0.0.0.0 --port 8080 app.gateway:app
-```
-
-The production Docker image uses the same application entry point and starts Granian on port `8080`. The Docker build also generates the protobuf stubs.
 
 The main source tree is organized as follows:
 
 ```text
-app/
-  config.py          Environment and model-registry loading
-  database.py        PostgreSQL budget, claim, and outbox operations
-  gateway.py         Application startup and shutdown
-  grpc_server.py     ModelGatewayService implementation
-  http.py            OpenAI-compatible HTTP API
-  runtime.py         Provider dispatch and response parsing
-  service.py         Model resolution, budgets, fallbacks, and metering
+cmd/server/           Service entrypoint and wiring
+
+internal/
+  api/openai/         OpenAI-compatible HTTP API
+  adapter/
+    grpc/             ModelGatewayService implementation
+    pg/               PostgreSQL budget, claim, and outbox operations
+    vendors/          openai, anthropic, gemini, vertexembed upstreams
+    clients/          Upstream provider clients
+    middleware/       Metering and companion suspension
+    modelarmor/       Cloud Model Armor policy integration
+    registry/         Model registry resolver
+    secrets/          Secret resolution
+  domain/             Model resolution, budgets, fallbacks, and metering
+  executor/           Dispatch executor
+  registry/           Model registry loading
 
 config/
-  models.yaml        Logical model registry
+  models.yaml         Logical model registry
 
 proto/
   model_gateway_service.proto
-
-tests/
-  HTTP, gRPC, runtime, registry, budget, and compatibility tests
-
-tools/
-  stub_openai.py     Local provider stub used by tests and smoke paths
 ```

@@ -307,7 +307,7 @@ func debitActiveBudget(ctx context.Context, tx *sql.Tx, tenantID string, usdMicr
 // event-envelope-shaped JSON metadata including tenant_id +
 // traceparent; status = pending/published/failed/deadlettered).
 //
-// The chora-go-common/outbox PostgresRecorder + Relay drain this table
+// The chora-common/outbox PostgresRecorder + Relay drain this table
 // → canonical Pub/Sub topic chora.observability.token_usage.recorded.v1.
 const outboxTableName = "outbox_events"
 

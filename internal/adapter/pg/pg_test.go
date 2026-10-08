@@ -331,7 +331,7 @@ func TestIntegration_DebitAndEnqueue_AtomicSuccess(t *testing.T) {
 	assert.Equal(t, int64(362), spent)
 
 	// Verify outbox row inserted. tenant_id lives inside envelope JSONB
-	// per the chora-go-common/outbox schema.
+	// per the chora-common/outbox schema.
 	var outboxCount int
 	err = db.QueryRow(`SELECT count(*) FROM outbox_events WHERE envelope->>'tenant_id' = $1 AND event_type = 'chora.observability.token_usage.recorded.v1'`, tenantA).Scan(&outboxCount)
 	require.NoError(t, err)

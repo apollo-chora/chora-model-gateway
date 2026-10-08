@@ -1,6 +1,6 @@
-# Test registry for internal/registry tests. Mirrors the shape of the
-# Python reference config/models.yaml: every entry declares id, provider,
-# base_url and the dispatch-relevant knobs.
+# Test registry for internal/registry tests. Mirrors the shape of
+# config/models.yaml: every entry declares id, provider, base_url and the
+# dispatch-relevant knobs.
 models:
   - id: gpt-4o
     provider: openai

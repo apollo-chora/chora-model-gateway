@@ -38,7 +38,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	commonobs "github.com/5007-Capstone/chora/libs/chora-go-common/observability"
+	commonobs "github.com/apollo-chora/chora-common/observability"
 	mgv1 "github.com/apollo-chora/chora-contracts/gen/go/chora/services/model_gateway/v1"
 
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/clients"
@@ -87,7 +87,7 @@ func run() error {
 
 	// ---------------------------------------------------------------------
 	// OTLP wiring — direct to Cloud Trace per Tier 3 D13 + Wave B fix
-	// (2026-05-14). Uses the canonical libs/chora-go-common/observability
+	// (2026-05-14). Uses the canonical chora-common/observability
 	// InitOTLPAsync helper which:
 	//   - Routes to the Cloud Trace exporter (NOT raw otlptracegrpc — that
 	//     silently dropped spans pre-Wave-B per the package docs).
@@ -375,7 +375,7 @@ func run() error {
 		// HANDOFF_OBSERVABILITY_OUTBOX_JAM_2026-05-29 Fix 2).
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		// W3C traceparent string extraction onto ctx for slog trace correlation
-		// per the canonical libs/chora-go-common/observability convention.
+		// per the canonical chora-common/observability convention.
 		grpc.UnaryInterceptor(commonobs.GRPCServerInterceptor()),
 	)
 	mgv1.RegisterModelGatewayServiceServer(gs, gwAdapter)
