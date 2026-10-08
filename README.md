@@ -109,7 +109,7 @@ The gateway resolves tenant and request context from Chora headers and environme
 
 ### gRPC
 
-The gRPC server listens on `9090` by default and implements the `ModelGatewayService` declared in `proto/model_gateway_service.proto`.
+The gRPC server listens on `9090` by default and implements the `ModelGatewayService` declared in `chora-contracts/proto/services/model_gateway_service.proto`.
 
 Implemented RPCs:
 
@@ -193,7 +193,4 @@ internal/
 
 config/
   models.yaml         Logical model registry
-
-proto/
-  model_gateway_service.proto
 ```
