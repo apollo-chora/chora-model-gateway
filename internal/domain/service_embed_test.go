@@ -250,7 +250,13 @@ func TestEmbed_vendorErrorSurfaces(t *testing.T) {
 	}
 }
 
-func TestEmbed_defaultsModelAndDimensions(t *testing.T) {
+// The model defaults; the DIMENSION does not. A caller that omits `dimensions`
+// must not be given a gateway-invented one: the old 768 default asked every
+// model for 768 values, which the pinned production route (a 1024-dimension
+// model that rejects the parameter) answers with a 400. An omitted dimension
+// means "send no override" — the resolved model's own declared length decides
+// what the response must contain.
+func TestEmbed_defaultsModelAndSendsNoDimensionsOverride(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
@@ -265,8 +271,8 @@ func TestEmbed_defaultsModelAndDimensions(t *testing.T) {
 	if vendor.lastReq.LogicalModelID != "text-embedding-004" {
 		t.Errorf("default model must be text-embedding-004; got %q", vendor.lastReq.LogicalModelID)
 	}
-	if vendor.lastReq.OutputDimensions != 768 {
-		t.Errorf("default dimensionality must be 768; got %d", vendor.lastReq.OutputDimensions)
+	if vendor.lastReq.OutputDimensions != 0 {
+		t.Errorf("an omitted dimension must send NO override; got %d", vendor.lastReq.OutputDimensions)
 	}
 }
 

@@ -317,4 +317,10 @@ models:
     upstream_model: liquid/lfm-2.5-embedding-350m:free
     api_key_env: EMBEDDING_LLM_API_KEY
     capabilities: [embeddings]
+    # LiquidAI's LFM2.5 produces 1024-dimensional vectors and REJECTS a
+    # `dimensions` override (a 400, "produces 1024-dimensional embeddings"), so
+    # embedding_dimensions_param stays false and the gateway sends no
+    # parameter. Declaring the length makes a wrong-length response a loud
+    # refusal instead of a corrupt vector(1024) column.
+    embedding_dimensions: 1024
     pricing: {}

@@ -714,6 +714,96 @@ func TestOpenAI_EmbedText_EndpointPathOverride(t *testing.T) {
 	assert.Equal(t, "/custom/embeddings", capturedPath)
 }
 
+// The embedding dispatch carries the credential of the entry it was ROUTED to,
+// not the vendor family's platform key the adapter's SecretClient would
+// resolve. Without this, a request re-pointed at OpenRouter would carry the
+// OpenAI key to a host it does not belong to.
+func TestOpenAI_EmbedText_UsesTheResolvedEntryCredential(t *testing.T) {
+	var capturedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"model": "liquid/lfm-2.5-embedding-350m:free", "data": [{"embedding": [0.1], "index": 0}], "usage": {"prompt_tokens": 1}}`))
+	}))
+	defer srv.Close()
+
+	// The SecretClient would hand back a DIFFERENT key for this family: the
+	// resolved entry's credential must win.
+	c, err := openai.New(openai.Config{
+		HTTPClient: srv.Client(),
+		Secrets:    stubSecrets{byoa: "family-key", global: "global-family-key"},
+		Endpoint:   "https://api.openai.com/v1",
+	})
+	require.NoError(t, err)
+
+	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
+		LogicalModelID: "text-embedding-004",
+		UpstreamModel:  "liquid/lfm-2.5-embedding-350m:free",
+		BaseURL:        srv.URL,
+		APIKey:         "openrouter-key",
+		APIKeyEnv:      "EMBEDDING_LLM_API_KEY",
+		Text:           "hello",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "Bearer openrouter-key", capturedAuth,
+		"the resolved entry's credential must be sent, never the vendor family's key")
+}
+
+// An entry that declares no credential reference is dispatched with no
+// Authorization header at all — a public or self-hosted endpoint needs none,
+// and the family's platform key must not leak to it.
+func TestOpenAI_EmbedText_NoCredentialReferenceSendsNoAuthorization(t *testing.T) {
+	var capturedAuth string
+	var sawHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth, sawHeader = r.Header.Get("Authorization"), true
+		_, _ = w.Write([]byte(`{"model": "self-hosted-embed", "data": [{"embedding": [0.1], "index": 0}], "usage": {"prompt_tokens": 1}}`))
+	}))
+	defer srv.Close()
+
+	c, err := openai.New(openai.Config{
+		HTTPClient: srv.Client(),
+		Secrets:    stubSecrets{byoa: "family-key"},
+		Endpoint:   srv.URL,
+	})
+	require.NoError(t, err)
+
+	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
+		LogicalModelID: "self-hosted-embed",
+		BaseURL:        srv.URL,
+		Text:           "hello",
+	})
+	require.NoError(t, err)
+
+	assert.True(t, sawHeader)
+	assert.Empty(t, capturedAuth, "an entry with no credential reference must send no Authorization header")
+}
+
+// A declared credential reference that resolved to nothing is a loud adapter
+// error, never a silent downgrade to another host's key.
+func TestOpenAI_EmbedText_DeclaredCredentialMissing_IsRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("no request may be sent without the resolved credential")
+	}))
+	defer srv.Close()
+
+	c, err := openai.New(openai.Config{
+		HTTPClient: srv.Client(),
+		Secrets:    stubSecrets{byoa: "family-key"},
+		Endpoint:   srv.URL,
+	})
+	require.NoError(t, err)
+
+	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
+		LogicalModelID: "text-embedding-004",
+		BaseURL:        srv.URL,
+		APIKeyEnv:      "EMBEDDING_LLM_API_KEY",
+		Text:           "hello",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "EMBEDDING_LLM_API_KEY")
+}
+
 func TestOpenAI_ProviderError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

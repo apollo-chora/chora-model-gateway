@@ -173,12 +173,19 @@ func mapEmbedError(err error) error {
 	// or no embedding adapter is wired for the resolved provider. These are
 	// configuration faults (the Invoke path maps the same set to
 	// FailedPrecondition), not vendor failures — and nothing was billed.
+	//
+	// A dimension refusal belongs here too: the request asks for a vector
+	// length the resolved model is known not to produce, or the route returned
+	// a length that contradicts its own configuration. Either way the caller's
+	// request cannot be served as configured, and the message says which.
 	var cfgErr *domain.ConfigError
 	var capErr *domain.CapabilityError
 	var credErr *domain.CredentialError
 	var noProvider *domain.NoProviderError
+	var dimErr *domain.DimensionMismatchError
 	if errors.As(err, &cfgErr) || errors.As(err, &capErr) ||
-		errors.As(err, &credErr) || errors.As(err, &noProvider) {
+		errors.As(err, &credErr) || errors.As(err, &noProvider) ||
+		errors.As(err, &dimErr) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	// For non-upstream errors, the gateway-controlled message is safe to

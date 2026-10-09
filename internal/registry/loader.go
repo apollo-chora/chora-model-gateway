@@ -273,31 +273,51 @@ func specFromRow(row map[string]any) (ModelSpec, error) {
 		return ModelSpec{}, err
 	}
 
+	// Embedding dimension metadata. Declaring either field on an entry that
+	// does not advertise `embeddings` is a boot-time error: it would read as a
+	// dimension policy for a model that never produces a vector.
+	embeddingDimensions, err := yamlInt(row, "embedding_dimensions")
+	if err != nil {
+		return ModelSpec{}, err
+	}
+	if embeddingDimensions < 0 {
+		return ModelSpec{}, &ConfigError{Msg: "embedding_dimensions cannot be negative"}
+	}
+	embeddingDimensionsParam, err := yamlBool(row, "embedding_dimensions_param")
+	if err != nil {
+		return ModelSpec{}, err
+	}
+	if (embeddingDimensions > 0 || embeddingDimensionsParam) && !hasCapability(caps, "embeddings") {
+		return ModelSpec{}, &ConfigError{Msg: "embedding dimension metadata is configured but `capabilities` does not include 'embeddings'"}
+	}
+
 	format := "chat_completions"
 	if provider == "anthropic" {
 		format = "messages"
 	}
 
 	return ModelSpec{
-		ID:                  id,
-		Kind:                kind,
-		Provider:            provider,
-		Format:              format,
-		UpstreamModel:       upstreamModel,
-		BaseURL:             baseURL,
-		ChatCompletionsPath: paths["chat_completions_path"],
-		MessagesPath:        paths["messages_path"],
-		ImagesPath:          paths["images_path"],
-		EmbeddingsPath:      paths["embeddings_path"],
-		APIKeyEnv:           yamlString(row, "api_key_env"),
-		Capabilities:        caps,
-		FallbackIDs:         fallbackIDs,
-		Aliases:             aliases,
-		ContextWindow:       contextWindow,
-		MaxOutputTokens:     maxOutput,
-		Pricing:             pricing,
-		ExtraHeaders:        extraHeaders,
-		Grounding:           grounding,
+		ID:                       id,
+		Kind:                     kind,
+		Provider:                 provider,
+		Format:                   format,
+		UpstreamModel:            upstreamModel,
+		BaseURL:                  baseURL,
+		ChatCompletionsPath:      paths["chat_completions_path"],
+		MessagesPath:             paths["messages_path"],
+		ImagesPath:               paths["images_path"],
+		EmbeddingsPath:           paths["embeddings_path"],
+		APIKeyEnv:                yamlString(row, "api_key_env"),
+		Capabilities:             caps,
+		EmbeddingDimensions:      embeddingDimensions,
+		EmbeddingDimensionsParam: embeddingDimensionsParam,
+		FallbackIDs:              fallbackIDs,
+		Aliases:                  aliases,
+		ContextWindow:            contextWindow,
+		MaxOutputTokens:          maxOutput,
+		Pricing:                  pricing,
+		ExtraHeaders:             extraHeaders,
+		Grounding:                grounding,
 	}, nil
 }
 
@@ -606,6 +626,27 @@ func yamlInt64(row map[string]any, key string) (int64, error) {
 		return parsed, nil
 	default:
 		return 0, &ConfigError{Msg: fmt.Sprintf("%s is not a valid integer", key)}
+	}
+}
+
+// yamlBool coerces a YAML value to bool: bools pass through, the usual string
+// spellings parse. Anything else is a boot-time ConfigError.
+func yamlBool(row map[string]any, key string) (bool, error) {
+	v, ok := row[key]
+	if !ok || v == nil {
+		return false, nil
+	}
+	switch b := v.(type) {
+	case bool:
+		return b, nil
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(b))
+		if err != nil {
+			return false, &ConfigError{Msg: fmt.Sprintf("%s %q is not a valid boolean", key, b)}
+		}
+		return parsed, nil
+	default:
+		return false, &ConfigError{Msg: fmt.Sprintf("%s is not a valid boolean", key)}
 	}
 }
 

@@ -15,10 +15,6 @@ import "time"
 // logical_model_id empty. Matches both former direct call sites.
 const DefaultEmbeddingModelID LogicalModelID = "text-embedding-004"
 
-// defaultEmbeddingDimensions matches every pgvector(768) column both call
-// sites write (atom_embeddings, familiar_memory_recall).
-const defaultEmbeddingDimensions = 768
-
 // embeddingModelAllowlist enumerates the model ids the Embed flow accepts.
 // A generation model on the embed path is refused, never silently
 // re-routed; extending this list is a reviewed edit.
@@ -41,7 +37,36 @@ var embeddingModelAllowlist = map[LogicalModelID]bool{
 // (cmd/server/embedding_pin.go).
 type EmbeddingRoutePin struct {
 	LogicalID LogicalModelID
+
+	// ExpectedDimensions is the vector length the approved upstream produces
+	// (the deployment's pgvector column width). 0 = unconstrained. A pinned
+	// route requires every response to carry exactly this many values and
+	// never forwards a `dimensions` parameter: the approved Liquid upstream
+	// rejects the parameter rather than honouring it, and the registry the
+	// deployment mounts cannot declare its own dimension metadata.
+	ExpectedDimensions int32
 }
+
+// DimensionMismatchError is the embedding dimension refusal. It covers both
+// shapes of the same defect: a REQUESTED dimension the resolved model cannot
+// produce (the model is known to emit a different length and takes no
+// override), and a RETURNED vector whose length differs from what the model is
+// known to produce. Both are loud refusals — the gateway never truncates or
+// pads a vector, because a silently wrong-length embedding corrupts the
+// pgvector column it is written to.
+type DimensionMismatchError struct {
+	// Model is the logical id of the target that could not honour the request.
+	Model LogicalModelID
+	// Expected is the length the model is known to produce (0 = undeclared).
+	Expected int32
+	// Actual is the returned length; 0 when the request itself was refused
+	// before dispatch.
+	Actual int32
+	// Detail is the operator-facing explanation.
+	Detail string
+}
+
+func (e *DimensionMismatchError) Error() string { return e.Detail }
 
 // EmbedFlowRequest is the domain-side input for one text embedding.
 type EmbedFlowRequest struct {
@@ -84,11 +109,29 @@ type EmbedVendorRequest struct {
 	// to. Empty means the adapter's own configured endpoint.
 	BaseURL string
 
-	Text             string
-	TaskType         string
+	// APIKey is the credential resolved from the RESOLVED registry entry
+	// (ModelInfo.APIKey). The adapter sends THIS credential rather than the
+	// one its own family-keyed SecretClient would resolve: a request routed to
+	// a different host must never carry another provider's credential.
+	APIKey string
+
+	// APIKeyEnv is the resolved entry's credential reference
+	// (ModelInfo.APIKeyEnv). Empty means the entry needs no auth — the adapter
+	// sends no Authorization header at all.
+	APIKeyEnv string
+
+	Text string
+	// TaskType is the provider's task hint (Vertex: RETRIEVAL_DOCUMENT).
+	TaskType string
+
+	// OutputDimensions is the `dimensions` parameter to SEND to the provider.
+	// 0 = send none, which is not the same thing as "no expected length": the
+	// expected vector length is the model's declared/pinned dimension, and a
+	// model that always produces N values may take no parameter at all.
 	OutputDimensions int32
-	TenantID         string
-	Traceparent      string
+
+	TenantID    string
+	Traceparent string
 }
 
 // EmbedVendorResponse is what the embedding vendor adapter returns.

@@ -218,11 +218,17 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 // the registry base_url. A logical id is an alias, so an OpenRouter entry is
 // served here against openrouter.ai — never against whatever endpoint the
 // adapter happens to have been built with.
+//
+// The CREDENTIAL is the resolved entry's own (req.APIKey): routing the request
+// to a different host without also re-pointing the credential would send the
+// vendor family's platform key to a host it does not belong to. An entry that
+// declares no credential reference is dispatched with no Authorization header
+// at all.
 func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (domain.EmbedVendorResponse, error) {
 	if err := domain.CheckContextCancellation(ctx); err != nil {
 		return domain.EmbedVendorResponse{}, err
 	}
-	apiKey, err := c.resolveKey(ctx, req.TenantID)
+	apiKey, err := embedCredential(req)
 	if err != nil {
 		return domain.EmbedVendorResponse{}, err
 	}
@@ -290,6 +296,21 @@ func (c *Client) resolveEndpointFor(baseURL, path, defaultPath string) string {
 // Key resolution
 // ---------------------------------------------------------------------------
 
+// embedCredential returns the credential an embedding dispatch carries: the
+// one resolved from the registry entry the request was routed to. It
+// deliberately does NOT fall back to the adapter's family-keyed SecretClient —
+// that key belongs to the vendor family's own endpoint, and this request is
+// going wherever the resolved entry's base_url points. An entry with no
+// credential reference is dispatched anonymously (a public or self-hosted
+// server), and an entry whose declared reference resolved to nothing is a
+// loud error rather than a silent downgrade to another host's key.
+func embedCredential(req domain.EmbedVendorRequest) (string, error) {
+	if req.APIKeyEnv != "" && req.APIKey == "" {
+		return "", fmt.Errorf("openai: embedding credential %q is not available; refusing to fall back to another provider's credential", req.APIKeyEnv)
+	}
+	return req.APIKey, nil
+}
+
 func (c *Client) resolveKey(ctx context.Context, tenantID string) (string, error) {
 	apiKey, err := c.secrets.ResolveByoaKey(ctx, tenantID, domain.VendorFamilyOpenAI)
 	if err != nil {
@@ -318,7 +339,11 @@ func (c *Client) setHeaders(httpReq *http.Request, apiKey string) {
 		}
 		httpReq.Header.Set(k, v)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	// No key means the resolved entry declares none (a public or self-hosted
+	// endpoint): send no Authorization header rather than an empty bearer.
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 }
 

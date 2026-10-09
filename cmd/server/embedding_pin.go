@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/apollo-chora/chora-model-gateway/internal/domain"
@@ -28,11 +29,13 @@ import (
 // Defaults for the approved demo route. The upstream model id is the current
 // committed value (chora-stack/config/model-gateway/models.prod.yaml); the
 // provider host is the OpenRouter endpoint the deployment points
-// EMBEDDING_LLM_BASE_URL at.
+// EMBEDDING_LLM_BASE_URL at. The dimension is the width LiquidAI's LFM2.5
+// produces and the deployment's pgvector columns hold (vector(1024)).
 const (
 	defaultEmbeddingPinLogicalID     = "text-embedding-004"
 	defaultEmbeddingPinUpstreamModel = "liquid/lfm-2.5-embedding-350m:free"
 	defaultEmbeddingPinProviderHost  = "openrouter.ai"
+	defaultEmbeddingPinDimensions    = 1024
 )
 
 // embeddingPinConfig is the parsed CHORA_EMBEDDING_PIN_* configuration.
@@ -41,6 +44,11 @@ type embeddingPinConfig struct {
 	LogicalID     string
 	UpstreamModel string
 	ProviderHost  string
+	// Dimensions is the vector length the approved upstream produces. The
+	// Embed flow requires every response on the pinned route to carry exactly
+	// this many values (never truncated or padded) and sends no `dimensions`
+	// parameter, which the approved upstream rejects.
+	Dimensions int
 }
 
 // loadEmbeddingPinConfig parses the pin configuration. A disabled pin is
@@ -65,17 +73,26 @@ func loadEmbeddingPinConfig() (embeddingPinConfig, error) {
 			return cfg, fmt.Errorf("embedding route pin enabled but %s is empty", k)
 		}
 	}
+	dims, err := strconv.Atoi(strings.TrimSpace(envOr("CHORA_EMBEDDING_PIN_DIMENSIONS", strconv.Itoa(defaultEmbeddingPinDimensions))))
+	if err != nil || dims <= 0 {
+		return cfg, fmt.Errorf("embedding route pin enabled but CHORA_EMBEDDING_PIN_DIMENSIONS is not a positive integer")
+	}
+	cfg.Dimensions = dims
 	return cfg, nil
 }
 
 // domainPin returns the domain-side pin the Embed flow enforces at request
-// time (a runtime override that is not the pinned logical id is refused).
-// nil when the pin is disabled.
+// time (a runtime override that is not the pinned logical id is refused, and
+// every response must carry the approved vector length). nil when the pin is
+// disabled.
 func (c embeddingPinConfig) domainPin() *domain.EmbeddingRoutePin {
 	if !c.Enabled {
 		return nil
 	}
-	return &domain.EmbeddingRoutePin{LogicalID: domain.LogicalModelID(c.LogicalID)}
+	return &domain.EmbeddingRoutePin{
+		LogicalID:          domain.LogicalModelID(c.LogicalID),
+		ExpectedDimensions: int32(c.Dimensions), // #nosec G115 -- a validated positive dimension, far below int32
+	}
 }
 
 // embedderFamilies lists the vendor families of the wired embedding adapters,
@@ -116,6 +133,16 @@ func verifyEmbeddingRoutePin(reg registry.Registry, embedders []domain.Embedding
 	if len(spec.FallbackIDs) > 0 {
 		return fmt.Errorf("embedding route pin: logical id %q declares fallbacks %v; the pinned route must have none (a fallback can bill a paid model)",
 			cfg.LogicalID, spec.FallbackIDs)
+	}
+	// The approved endpoint authenticates every request, so the pinned entry
+	// must name a credential reference AND that reference must resolve. The
+	// reference NAME is reported; the VALUE is never read into an error or a
+	// log line.
+	if strings.TrimSpace(spec.APIKeyEnv) == "" {
+		return fmt.Errorf("embedding route pin: logical id %q declares no api_key_env; the approved route is never called anonymously", cfg.LogicalID)
+	}
+	if spec.APIKey() == "" {
+		return fmt.Errorf("embedding route pin: credential reference %q resolves to an empty value (the value itself is never logged)", spec.APIKeyEnv)
 	}
 	// Provider metadata, where available: the registry entry's base_url when it
 	// declares one, else the deployment's EMBEDDING_LLM_BASE_URL (the endpoint

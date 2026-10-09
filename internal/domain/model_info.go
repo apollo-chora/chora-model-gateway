@@ -28,6 +28,18 @@ type ModelInfo struct {
 	// "vision", "image", "embeddings", "web_search"). Empty means ["chat"].
 	Capabilities []string
 
+	// EmbeddingDimensions is the vector length the entry's upstream produces —
+	// the length the deployment's pgvector column expects. 0 = undeclared, in
+	// which case the Embed flow validates only that the returned vector is
+	// non-empty.
+	EmbeddingDimensions int
+
+	// EmbeddingDimensionsParam reports whether the upstream accepts a
+	// `dimensions` override. false (the default) means the Embed flow must not
+	// send the parameter: the pinned Liquid embedding model rejects it with a
+	// 400 instead of honouring it.
+	EmbeddingDimensionsParam bool
+
 	// MaxOutputTokens is the generation ceiling; the gateway clamps callers
 	// to it. 0 = unbounded.
 	MaxOutputTokens int

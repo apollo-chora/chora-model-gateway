@@ -418,6 +418,77 @@ models:
 	assert.Contains(t, err.Error(), "grounding block is configured but `capabilities` does not include 'web_search'")
 }
 
+// Embedding dimension metadata is parsed onto the spec, and it is only
+// meaningful for an entry that advertises the embeddings capability.
+func TestLoadEmbeddingDimensionMetadata(t *testing.T) {
+	clearEnvRoleVars(t)
+	path := writeRegistry(t, `
+models:
+  - id: embed
+    provider: openai
+    base_url: https://openrouter.test/api/v1
+    capabilities: [embeddings]
+    embedding_dimensions: 1024
+  - id: embed-flex
+    provider: openai
+    base_url: https://api.openai.test/v1
+    capabilities: [embeddings]
+    embedding_dimensions: 3072
+    embedding_dimensions_param: true
+  - id: chat
+    provider: openai
+    base_url: https://api.openai.test/v1
+    capabilities: [chat]
+`)
+	reg, err := registry.Load(path)
+	require.NoError(t, err)
+
+	embed, ok := reg.Get("embed")
+	require.True(t, ok)
+	assert.Equal(t, 1024, embed.EmbeddingDimensions)
+	assert.False(t, embed.EmbeddingDimensionsParam, "a model that takes no dimensions override must default to false")
+
+	flex, ok := reg.Get("embed-flex")
+	require.True(t, ok)
+	assert.Equal(t, 3072, flex.EmbeddingDimensions)
+	assert.True(t, flex.EmbeddingDimensionsParam)
+
+	chat, ok := reg.Get("chat")
+	require.True(t, ok)
+	assert.Zero(t, chat.EmbeddingDimensions)
+	assert.False(t, chat.EmbeddingDimensionsParam)
+}
+
+func TestLoadRejectsNegativeEmbeddingDimensions(t *testing.T) {
+	clearEnvRoleVars(t)
+	path := writeRegistry(t, `
+models:
+  - id: embed
+    provider: openai
+    base_url: https://x.test/v1
+    capabilities: [embeddings]
+    embedding_dimensions: -1
+`)
+	_, err := registry.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "embedding_dimensions cannot be negative")
+}
+
+func TestLoadRejectsEmbeddingDimensionsWithoutEmbeddingCapability(t *testing.T) {
+	clearEnvRoleVars(t)
+	path := writeRegistry(t, `
+models:
+  - id: chat
+    provider: openai
+    base_url: https://x.test/v1
+    capabilities: [chat]
+    embedding_dimensions: 1024
+`)
+	_, err := registry.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not include 'embeddings'")
+}
+
 func TestLoadRejectsBadGroundingSurface(t *testing.T) {
 	clearEnvRoleVars(t)
 	path := writeRegistry(t, `

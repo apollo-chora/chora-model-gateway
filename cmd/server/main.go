@@ -264,6 +264,7 @@ func run() error {
 		slog.Info("embedding route pin verified",
 			"logical_id", cfg.embeddingPin.LogicalID,
 			"upstream_model", cfg.embeddingPin.UpstreamModel,
+			"expected_dimensions", cfg.embeddingPin.Dimensions,
 			"embedding_adapters", embedderFamilies(embedders),
 			"registry", envOr("CHORA_MODEL_REGISTRY", "config/models.yaml"),
 		)

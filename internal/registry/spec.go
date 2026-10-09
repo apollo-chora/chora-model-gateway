@@ -169,6 +169,21 @@ type ModelSpec struct {
 	// Capabilities advertises what the model can do. Empty means ["chat"].
 	Capabilities []string `yaml:"capabilities,omitempty"`
 
+	// EmbeddingDimensions is the vector length the upstream produces — the
+	// length the deployment's pgvector column expects. 0 = undeclared, in
+	// which case the Embed flow validates only that the returned vector is
+	// non-empty. Declaring it makes a wrong-length vector a loud refusal
+	// instead of a corrupt column.
+	EmbeddingDimensions int `yaml:"embedding_dimensions"`
+
+	// EmbeddingDimensionsParam reports whether the upstream accepts a
+	// `dimensions` override. Default false: the gateway sends no dimensions
+	// parameter unless the entry declares that the upstream takes one. The
+	// pinned OpenRouter Liquid embedding model rejects the parameter outright
+	// (a 400, "produces 1024-dimensional embeddings"), so sending one there
+	// would break a route that otherwise works.
+	EmbeddingDimensionsParam bool `yaml:"embedding_dimensions_param"`
+
 	// FallbackIDs are tried in order when this model fails.
 	FallbackIDs []string `yaml:"fallback_ids,omitempty"`
 

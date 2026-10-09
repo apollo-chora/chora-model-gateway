@@ -559,13 +559,18 @@ func mapEmbedError(err error) mappedError {
 	// Registry / policy refusals discovered BEFORE any provider call: the
 	// logical model is unknown to the registry, the resolved entry cannot
 	// serve embeddings, or no embedding adapter is wired for the resolved
-	// provider. A refusal, not an upstream fault — nothing was billed.
+	// provider. A refusal, not an upstream fault — nothing was billed. A
+	// dimension refusal rides the same arm: the request asks for a vector
+	// length the resolved model is known not to produce, or the route returned
+	// a length that contradicts its own configuration.
 	var cfgErr *domain.ConfigError
 	var capErr *domain.CapabilityError
 	var credErr *domain.CredentialError
 	var noProvider *domain.NoProviderError
+	var dimErr *domain.DimensionMismatchError
 	if errors.As(err, &cfgErr) || errors.As(err, &capErr) ||
-		errors.As(err, &credErr) || errors.As(err, &noProvider) {
+		errors.As(err, &credErr) || errors.As(err, &noProvider) ||
+		errors.As(err, &dimErr) {
 		return mappedError{http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error()}
 	}
 	// For non-upstream errors, the gateway-controlled message is safe to

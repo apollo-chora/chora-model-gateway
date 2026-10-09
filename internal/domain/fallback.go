@@ -425,15 +425,23 @@ func (e *CapabilityError) Error() string {
 	return fmt.Sprintf("model %q does not advertise the %q capability", e.Model, e.Capability)
 }
 
-// CredentialError is a per-target preflight refusal: the registry's credential
-// reference is set but resolves to an empty value, so the call would go out
-// unauthenticated. ErrorKindConfig, like CapabilityError.
+// CredentialError is a per-target preflight refusal: either the registry's
+// credential reference is set but resolves to an empty value, or the entry
+// declares no reference at all while pointing at a provider that authenticates
+// every request — so the call would go out unauthenticated. ErrorKindConfig,
+// like CapabilityError. The credential VALUE is never carried (or logged).
 type CredentialError struct {
 	Model     LogicalModelID
 	APIKeyEnv string
+	// Detail replaces the default message for the complementary refusal: an
+	// entry with no credential reference dispatched to an authenticated host.
+	Detail string
 }
 
 func (e *CredentialError) Error() string {
+	if e.Detail != "" {
+		return e.Detail
+	}
 	return fmt.Sprintf("credential reference %q is set but resolves to an empty value", e.APIKeyEnv)
 }
 
