@@ -5,7 +5,10 @@
 // HTML). Embeddings need their own regional location config.
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // setRequiredBootEnv satisfies loadConfig's fail-loud required envs so the
 // location assertions can run.
@@ -75,5 +78,73 @@ func TestLoadConfig_BudgetRequiredFlagOn(t *testing.T) {
 	}
 	if !cfg.budgetRequired {
 		t.Fatalf("budgetRequired = false, want true when CHORA_LLM_BUDGET_REQUIRED=true")
+	}
+}
+
+// CHORA_LLM_BUDGET_REQUIRED_TENANTS parses into a set of canonical tenant
+// UUIDs; the global flag stays off so the override's effect is isolated.
+func TestLoadConfig_BudgetRequiredTenants_Parsed(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED_TENANTS", "33333333-3333-7333-8333-333333333333, 44444444-4444-7444-8444-444444444444 ")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.budgetRequired {
+		t.Fatalf("budgetRequired = true, want the global flag off")
+	}
+	if len(cfg.budgetRequiredTenants) != 2 {
+		t.Fatalf("len(budgetRequiredTenants) = %d, want 2", len(cfg.budgetRequiredTenants))
+	}
+	if !cfg.budgetRequiredTenants.Contains("33333333-3333-7333-8333-333333333333") {
+		t.Errorf("listed tenant 33333333-3333-7333-8333-333333333333 missing from budgetRequiredTenants")
+	}
+	if !cfg.budgetRequiredTenants.Contains("44444444-4444-7444-8444-444444444444") {
+		t.Errorf("listed tenant 44444444-4444-7444-8444-444444444444 missing from budgetRequiredTenants")
+	}
+}
+
+// Unset ⇒ empty set, no error.
+func TestLoadConfig_BudgetRequiredTenants_DefaultEmpty(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED_TENANTS", "")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.budgetRequiredTenants) != 0 {
+		t.Fatalf("budgetRequiredTenants = %v, want empty", cfg.budgetRequiredTenants)
+	}
+}
+
+// A malformed tenant UUID fails the boot — a typo must not silently un-gate
+// a tenant (mirrors the CHORA_DEMO_MANA_ALLOWED_GCIDS contract in
+// chora-identity).
+func TestLoadConfig_BudgetRequiredTenants_Malformed_FailsBoot(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED_TENANTS", "33333333-3333-7333-8333-333333333333,not-a-uuid")
+
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatal("loadConfig must fail on a malformed tenant UUID in CHORA_LLM_BUDGET_REQUIRED_TENANTS")
+	}
+	if !strings.Contains(err.Error(), "CHORA_LLM_BUDGET_REQUIRED_TENANTS") {
+		t.Errorf("err = %v, want it to name CHORA_LLM_BUDGET_REQUIRED_TENANTS", err)
+	}
+}
+
+// An empty entry (trailing comma) fails the boot too.
+func TestLoadConfig_BudgetRequiredTenants_EmptyEntry_FailsBoot(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED_TENANTS", "33333333-3333-7333-8333-333333333333,")
+
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatal("loadConfig must fail on an empty entry in CHORA_LLM_BUDGET_REQUIRED_TENANTS")
+	}
+	if !strings.Contains(err.Error(), "CHORA_LLM_BUDGET_REQUIRED_TENANTS") {
+		t.Errorf("err = %v, want it to name CHORA_LLM_BUDGET_REQUIRED_TENANTS", err)
 	}
 }

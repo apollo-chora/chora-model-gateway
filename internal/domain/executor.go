@@ -374,6 +374,11 @@ type Executor struct {
 	// active budget window is a BLOCK, not an allow. Sourced from
 	// CHORA_LLM_BUDGET_REQUIRED.
 	budgetRequired bool
+
+	// budgetRequiredTenants is the tenant-scoped override for the same mode
+	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS): listed tenants fail closed even
+	// when the global flag is off. See BudgetRequiredTenants.
+	budgetRequiredTenants BudgetRequiredTenants
 }
 
 // ExecutorConfig groups the ports + cross-cutting deps the Executor needs.
@@ -471,6 +476,13 @@ type ExecutorConfig struct {
 	// fail-open behaviour for every other tenant.
 	BudgetRequired bool
 
+	// BudgetRequiredTenants is the tenant-scoped override
+	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS): a comma-separated list of tenant
+	// UUIDs that fail closed even when BudgetRequired is false. Tenants not
+	// in the list keep the historical fail-open behaviour until their budgets
+	// have been provisioned.
+	BudgetRequiredTenants BudgetRequiredTenants
+
 	// DBTimeout bounds each database operation (budget read, idempotency
 	// claim, settlement debit + outbox). A slow DB must not consume the
 	// entire request budget — the provider dispatch is the expensive part
@@ -567,6 +579,8 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 		enforceToolsScreen:    cfg.EnforceToolsScreen,
 
 		budgetRequired: cfg.BudgetRequired,
+
+		budgetRequiredTenants: cfg.BudgetRequiredTenants,
 	}, nil
 }
 
@@ -746,10 +760,13 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 		}
 	} else {
 		budgetMissing = true
-		// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED):
-		// a missing active budget window is a BLOCK, not an allow — the
-		// absence of a policy must not restore unlimited provider spending.
-		if e.budgetRequired {
+		// Fail-closed "budget required" mode: a missing active budget window
+		// is a BLOCK, not an allow — the absence of a policy must not restore
+		// unlimited provider spending. The mode is global
+		// (CHORA_LLM_BUDGET_REQUIRED) or per-tenant
+		// (CHORA_LLM_BUDGET_REQUIRED_TENANTS); the decision is made per
+		// request from req.TenantID.
+		if budgetRequiredFor(e.budgetRequired, e.budgetRequiredTenants, req.TenantID) {
 			decision = BudgetBlock
 		}
 	}

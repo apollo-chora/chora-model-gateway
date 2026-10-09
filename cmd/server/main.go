@@ -84,6 +84,7 @@ func run() error {
 		"environment", cfg.environment,
 		"gateway_version", cfg.gatewayVersion,
 		"budget_required", cfg.budgetRequired,
+		"budget_required_tenants", cfg.budgetRequiredTenants,
 	)
 
 	// ---------------------------------------------------------------------
@@ -312,8 +313,12 @@ func run() error {
 		FallbackRetryBackoff: cfg.fallbackRetryBackoff,
 		// Fail-closed "budget required" mode: a missing active budget window
 		// is a BLOCK, not an allow — the absence of a policy must not restore
-		// unlimited provider spending. Default OFF.
+		// unlimited provider spending. Default OFF. The tenant-scoped override
+		// fails the listed tenants closed even when this flag is off.
 		BudgetRequired: cfg.budgetRequired,
+		// Tenant-scoped fail-closed override
+		// (CHORA_LLM_BUDGET_REQUIRED_TENANTS).
+		BudgetRequiredTenants: cfg.budgetRequiredTenants,
 		Now:                  time.Now,
 		NewID:                newInvocationID,
 		// The model-registry resolver backs the capability / output-ceiling /
@@ -504,6 +509,7 @@ type runtimeConfig struct {
 	fallbackRetries          int           // CHORA_FALLBACK_RETRIES — extra same-provider attempts for a retryable failure (timeout / 429 / 5xx); 0 = advance to the next target
 	fallbackRetryBackoff     time.Duration // CHORA_FALLBACK_RETRY_BACKOFF_MS — delay before each same-provider retry
 	budgetRequired            bool          // CHORA_LLM_BUDGET_REQUIRED — fail-closed: a missing active budget window BLOCKS provider calls instead of allowing them (default false)
+	budgetRequiredTenants     domain.BudgetRequiredTenants // CHORA_LLM_BUDGET_REQUIRED_TENANTS — tenant-scoped fail-closed override; listed tenants fail closed even when the global flag is off (default empty)
 	vendorHTTPTimeout        time.Duration
 	defaultTenantID          string // CHORA_DEFAULT_TENANT_ID — HTTP facade default tenant
 	defaultGCID              string // CHORA_DEFAULT_GCID — HTTP facade default GCID
@@ -531,6 +537,15 @@ func loadConfig() (runtimeConfig, error) {
 		defaultTenantID:          os.Getenv("CHORA_DEFAULT_TENANT_ID"),
 		defaultGCID:              os.Getenv("CHORA_DEFAULT_GCID"),
 	}
+	// Tenant-scoped fail-closed override (CHORA_LLM_BUDGET_REQUIRED_TENANTS):
+	// strict — a malformed or empty entry fails the boot rather than silently
+	// un-gating a tenant (mirrors the CHORA_DEMO_MANA_ALLOWED_GCIDS contract
+	// in chora-identity).
+	budgetRequiredTenants, err := domain.ParseBudgetRequiredTenants(os.Getenv("CHORA_LLM_BUDGET_REQUIRED_TENANTS"))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.budgetRequiredTenants = budgetRequiredTenants
 	if to := os.Getenv("CHORA_BOOTSTRAP_TIMEOUT_SECONDS"); to != "" {
 		n, err := strconv.Atoi(to)
 		if err != nil {

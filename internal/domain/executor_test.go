@@ -244,6 +244,80 @@ func TestExecute_BudgetRequired_On_ActiveWindow_Allows(t *testing.T) {
 	assert.Equal(t, 1, vendor.calls)
 }
 
+// ----------------------------------------------------------------------------
+// Tenant-scoped override (CHORA_LLM_BUDGET_REQUIRED_TENANTS)
+// ----------------------------------------------------------------------------
+
+// Global flag OFF + tenant IN the list + no active budget window ⇒ BLOCKED:
+// the tenant-scoped override fails the listed tenant closed even though the
+// global default keeps every other tenant fail-open.
+func TestExecute_BudgetRequired_TenantListed_BlocksDespiteGlobalOff(t *testing.T) {
+	listed := "33333333-3333-7333-8333-333333333333"
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequiredTenants = domain.BudgetRequiredTenants{listed: {}}
+		cfg.Budget = &fakeBudget{} // nil state — no active window
+	})
+
+	req := happyExecuteRequest()
+	req.TenantID = listed
+	resp, err := executor.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonBudgetBlock, resp.FinishReason)
+	assert.Contains(t, resp.FinishDetail, "budget required")
+	assert.Equal(t, domain.AccountingClaimed, resp.AccountingState)
+	assert.Equal(t, 0, vendor.calls, "a missing budget window must not reach the provider")
+}
+
+// Global flag OFF + tenant NOT in the list + no active budget window ⇒ the
+// historical allow is unchanged: the call dispatches, settles and ledgers.
+func TestExecute_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
+	executor, vendor, _, _, outbox, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequiredTenants = domain.BudgetRequiredTenants{"44444444-4444-7444-8444-444444444444": {}}
+		cfg.Budget = &fakeBudget{} // nil state — no active window
+	})
+
+	req := happyExecuteRequest()
+	req.TenantID = "55555555-5555-7555-8555-555555555555" // not listed
+	resp, err := executor.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, resp.FinishReason)
+	assert.Equal(t, 1, vendor.calls)
+	assert.Equal(t, domain.AccountingAccounted, resp.AccountingState)
+	require.Len(t, outbox.events, 1)
+}
+
+// Global flag ON ⇒ every tenant fails closed, listed or not.
+func TestExecute_BudgetRequired_GlobalOn_AllTenantsFailClosed(t *testing.T) {
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequired = true
+		cfg.Budget = &fakeBudget{} // nil state — no active window
+	})
+
+	req := happyExecuteRequest()
+	req.TenantID = "66666666-6666-7666-8666-666666666666" // in no list
+	resp, err := executor.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonBudgetBlock, resp.FinishReason)
+	assert.Equal(t, 0, vendor.calls)
+}
+
+// Budget row present + tenant listed ⇒ unchanged: an active window still
+// allows — the override only fails closed on a MISSING window.
+func TestExecute_BudgetRequired_TenantListed_ActiveWindow_Allows(t *testing.T) {
+	listed := "33333333-3333-7333-8333-333333333333"
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequiredTenants = domain.BudgetRequiredTenants{listed: {}}
+		// default fakeBudget carries an active window
+	})
+
+	req := happyExecuteRequest()
+	req.TenantID = listed
+	resp, err := executor.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, resp.FinishReason)
+	assert.Equal(t, 1, vendor.calls)
+}
+
 // An Armor POST block short-circuits AFTER the provider succeeded but BEFORE
 // settlement, so the state stays at SUCCEEDED — the provider ran and the call
 // is billable, but the debit + outbox never committed.

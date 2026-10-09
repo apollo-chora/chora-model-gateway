@@ -44,16 +44,17 @@ func (f *fakeEmbedOutbox) EnqueueTokenUsageRecorded(_ context.Context, evt domai
 
 func newEmbedService(t *testing.T, embedder domain.EmbeddingClient, outbox domain.OutboxWriter) *domain.Service {
 	t.Helper()
-	return newEmbedServiceWithBudgetRequired(t, embedder, outbox, false)
+	return newEmbedServiceWithConfig(t, false, nil, embedder, outbox)
 }
 
-// newEmbedServiceWithBudgetRequired is newEmbedService with the fail-closed
-// "budget required" mode (CHORA_LLM_BUDGET_REQUIRED) settable. The budget
-// fake carries a nil state (no active window) so the flag's effect is
-// observable.
-func newEmbedServiceWithBudgetRequired(t *testing.T, embedder domain.EmbeddingClient, outbox domain.OutboxWriter, budgetRequired bool) *domain.Service {
+// newEmbedServiceWithConfig is newEmbedService with the fail-closed "budget
+// required" mode (CHORA_LLM_BUDGET_REQUIRED) and its tenant-scoped override
+// (CHORA_LLM_BUDGET_REQUIRED_TENANTS) settable. The budget fake carries a nil
+// state (no active window) so the flags' effect is observable; a mod can
+// install a budget with an active window.
+func newEmbedServiceWithConfig(t *testing.T, budgetRequired bool, tenants domain.BudgetRequiredTenants, embedder domain.EmbeddingClient, outbox domain.OutboxWriter, mods ...func(cfg *domain.ServiceConfig)) *domain.Service {
 	t.Helper()
-	svc, err := domain.NewService(domain.ServiceConfig{
+	cfg := domain.ServiceConfig{
 		Vendors:        []domain.VendorClient{&fakeVendor{family: domain.VendorFamilyVertexGemini}},
 		Armor:          &fakeArmor{},
 		Budget:         &fakeBudget{},
@@ -62,9 +63,14 @@ func newEmbedServiceWithBudgetRequired(t *testing.T, embedder domain.EmbeddingCl
 		GatewayVersion: "chora-model-gateway:test",
 		Embedder:       embedder,
 		BudgetRequired: budgetRequired,
+		BudgetRequiredTenants: tenants,
 		Now:            func() time.Time { return time.Unix(1754500000, 0) },
 		NewID:          func() string { return "01988888-8888-7888-8888-888888888888" },
-	})
+	}
+	for _, m := range mods {
+		m(&cfg)
+	}
+	svc, err := domain.NewService(cfg)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -218,7 +224,7 @@ func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
-	svc := newEmbedServiceWithBudgetRequired(t, vendor, outbox, true)
+	svc := newEmbedServiceWithConfig(t, true, nil, vendor, outbox)
 
 	_, err := svc.Embed(context.Background(), validEmbedRequest())
 	require.Error(t, err)
@@ -235,7 +241,70 @@ func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
-	svc := newEmbedServiceWithBudgetRequired(t, vendor, outbox, false)
+	svc := newEmbedServiceWithConfig(t, false, nil, vendor, outbox)
+
+	resp, err := svc.Embed(context.Background(), validEmbedRequest())
+	require.NoError(t, err)
+	assert.Len(t, resp.Values, 1)
+	assert.Equal(t, 1, vendor.calls)
+	assert.Len(t, outbox.events, 1)
+}
+
+// ----------------------------------------------------------------------------
+// Tenant-scoped override (CHORA_LLM_BUDGET_REQUIRED_TENANTS)
+// ----------------------------------------------------------------------------
+
+// Global flag OFF + listed tenant + no active budget window ⇒ the embed is
+// refused BEFORE the vendor call; no vector, no ledger row.
+func TestEmbed_BudgetRequired_TenantListed_RefusesDespiteGlobalOff(t *testing.T) {
+	vendor := &fakeEmbedVendor{
+		family:   domain.VendorFamilyVertexGemini,
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+	}
+	outbox := &fakeEmbedOutbox{}
+	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}}, vendor, outbox)
+
+	_, err := svc.Embed(context.Background(), validEmbedRequest())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "budget required")
+	assert.Equal(t, 0, vendor.calls, "a missing budget window must not reach the provider")
+	assert.Len(t, outbox.events, 0, "a refused embed must not ledger")
+}
+
+// Global flag OFF + unlisted tenant + no active budget window ⇒ the
+// historical allow is unchanged: the vendor is called and the ledger row is
+// written.
+func TestEmbed_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
+	vendor := &fakeEmbedVendor{
+		family:   domain.VendorFamilyVertexGemini,
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+	}
+	outbox := &fakeEmbedOutbox{}
+	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"99999999-9999-7999-8999-999999999999": {}}, vendor, outbox)
+
+	resp, err := svc.Embed(context.Background(), validEmbedRequest())
+	require.NoError(t, err)
+	assert.Len(t, resp.Values, 1)
+	assert.Equal(t, 1, vendor.calls)
+	assert.Len(t, outbox.events, 1)
+}
+
+// Budget row present + listed tenant ⇒ unchanged allow: the override only
+// fails closed on a MISSING window.
+func TestEmbed_BudgetRequired_TenantListed_ActiveWindow_Allows(t *testing.T) {
+	vendor := &fakeEmbedVendor{
+		family:   domain.VendorFamilyVertexGemini,
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+	}
+	outbox := &fakeEmbedOutbox{}
+	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}}, vendor, outbox, func(cfg *domain.ServiceConfig) {
+		cfg.Budget = &fakeBudget{state: &domain.BudgetState{
+			TenantID:        "11111111-1111-7111-8111-111111111111",
+			BudgetUSDMicros: 1_000_000,
+			SpentUSDMicros:  0,
+			Policy:          domain.BudgetPolicyBlock,
+		}}
+	})
 
 	resp, err := svc.Embed(context.Background(), validEmbedRequest())
 	require.NoError(t, err)

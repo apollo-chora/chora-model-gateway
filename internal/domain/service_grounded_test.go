@@ -113,15 +113,26 @@ type groundedFakes struct {
 }
 
 // newGroundedTestService wires a Service with happy-path defaults for all
-// grounded ports (fail-closed "budget required" mode OFF). mods tweak the
-// fakes for a specific case.
+// grounded ports (fail-closed "budget required" mode OFF, no tenant override).
+// mods tweak the fakes for a specific case.
 func newGroundedTestService(t *testing.T, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
-	return newGroundedTestServiceWithConfig(t, false, mods...)
+	return newGroundedTestServiceWithBudget(t, false, nil, mods...)
 }
 
 // newGroundedTestServiceWithConfig is newGroundedTestService with the
 // fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED) settable.
 func newGroundedTestServiceWithConfig(t *testing.T, budgetRequired bool, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
+	return newGroundedTestServiceWithBudget(t, budgetRequired, nil, mods...)
+}
+
+// newGroundedTestServiceWithBudgetTenants is newGroundedTestService with the
+// tenant-scoped fail-closed override (CHORA_LLM_BUDGET_REQUIRED_TENANTS)
+// settable; the global flag stays OFF so the override's effect is isolated.
+func newGroundedTestServiceWithBudgetTenants(t *testing.T, tenants domain.BudgetRequiredTenants, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
+	return newGroundedTestServiceWithBudget(t, false, tenants, mods...)
+}
+
+func newGroundedTestServiceWithBudget(t *testing.T, budgetRequired bool, tenants domain.BudgetRequiredTenants, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
 	t.Helper()
 
 	f := &groundedFakes{
@@ -169,6 +180,7 @@ func newGroundedTestServiceWithConfig(t *testing.T, budgetRequired bool, mods ..
 		Mana:           f.mana,
 		EgressAudit:    f.audit,
 		BudgetRequired: budgetRequired,
+		BudgetRequiredTenants: tenants,
 		Now:            fixedTime,
 		NewID:          func() string { return "gs-invocation-id" },
 	})
@@ -353,6 +365,52 @@ func TestGroundedSearch_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 	svc, f := newGroundedTestServiceWithConfig(t, false, func(f *groundedFakes) {
 		f.budget.state = nil // no active window
 	})
+	res, err := svc.GroundedSearch(context.Background(), groundedReq())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, res.FinishReason)
+	assert.Equal(t, 1, f.grounded.calls)
+}
+
+// ----------------------------------------------------------------------------
+// Tenant-scoped override (CHORA_LLM_BUDGET_REQUIRED_TENANTS)
+// ----------------------------------------------------------------------------
+
+// Global flag OFF + listed tenant + no active budget window ⇒ the grounded
+// egress is denied BEFORE any web call, with the budget denial reason + an
+// audit event.
+func TestGroundedSearch_BudgetRequired_TenantListed_DeniesDespiteGlobalOff(t *testing.T) {
+	svc, f := newGroundedTestServiceWithBudgetTenants(t, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}}, func(f *groundedFakes) {
+		f.budget.state = nil // no active window
+	})
+	_, err := svc.GroundedSearch(context.Background(), groundedReq())
+	var gerr *domain.GroundedSearchError
+	require.ErrorAs(t, err, &gerr)
+	assert.Equal(t, domain.EgressDenyBudget, gerr.Reason)
+	assert.Contains(t, gerr.Detail, "budget required")
+	assert.Equal(t, 0, f.grounded.calls, "a missing budget window must not reach the web")
+	assert.Equal(t, 0, f.mana.quoteCalls, "the denial lands before the mana pre-flight")
+	require.Len(t, f.audit.events, 1)
+	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
+	assert.Equal(t, domain.EgressDenyBudget, f.audit.events[0].DenialReason)
+}
+
+// Global flag OFF + unlisted tenant + no active budget window ⇒ the
+// historical allow is unchanged: the egress proceeds and the vendor is
+// called.
+func TestGroundedSearch_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
+	svc, f := newGroundedTestServiceWithBudgetTenants(t, domain.BudgetRequiredTenants{"99999999-9999-7999-8999-999999999999": {}}, func(f *groundedFakes) {
+		f.budget.state = nil // no active window
+	})
+	res, err := svc.GroundedSearch(context.Background(), groundedReq())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, res.FinishReason)
+	assert.Equal(t, 1, f.grounded.calls)
+}
+
+// Budget row present + listed tenant ⇒ unchanged allow: the override only
+// fails closed on a MISSING window.
+func TestGroundedSearch_BudgetRequired_TenantListed_ActiveWindow_Allows(t *testing.T) {
+	svc, f := newGroundedTestServiceWithBudgetTenants(t, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}})
 	res, err := svc.GroundedSearch(context.Background(), groundedReq())
 	require.NoError(t, err)
 	assert.Equal(t, domain.FinishReasonComplete, res.FinishReason)

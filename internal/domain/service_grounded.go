@@ -71,10 +71,13 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 		return GroundedSearchResult{}, &GroundedSearchError{Reason: EgressDenyBudget, Detail: "budget repo unavailable", Inner: err}
 	}
 	if budget == nil {
-		// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED):
-		// a missing active budget window denies the egress — the absence of
-		// a policy must not restore unlimited provider spending.
-		if s.budgetRequired {
+		// Fail-closed "budget required" mode: a missing active budget window
+		// denies the egress — the absence of a policy must not restore
+		// unlimited provider spending. The mode is global
+		// (CHORA_LLM_BUDGET_REQUIRED) or per-tenant
+		// (CHORA_LLM_BUDGET_REQUIRED_TENANTS); the decision is made per
+		// request from req.TenantID.
+		if budgetRequiredFor(s.budgetRequired, s.budgetRequiredTenants, req.TenantID) {
 			s.emitEgressAudit(ctx, req, EgressAuditDenied, EgressDenyBudget, ArmorVerdictUnspecified, ArmorVerdictUnspecified, "", "", nil, 0)
 			return GroundedSearchResult{}, &GroundedSearchError{Reason: EgressDenyBudget, Detail: "no active LLM budget window for tenant; budget required (CHORA_LLM_BUDGET_REQUIRED)"}
 		}

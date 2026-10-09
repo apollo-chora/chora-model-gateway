@@ -53,6 +53,11 @@ type Service struct {
 	// budgetRequired enables the fail-closed "budget required" mode for the
 	// GroundedSearch + Embed flows (see ServiceConfig.BudgetRequired).
 	budgetRequired bool
+
+	// budgetRequiredTenants is the tenant-scoped override for the same mode
+	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS): listed tenants fail closed even
+	// when the global flag is off. See BudgetRequiredTenants.
+	budgetRequiredTenants BudgetRequiredTenants
 }
 
 // ServiceConfig groups the ports + cross-cutting deps the gateway needs.
@@ -108,6 +113,13 @@ type ServiceConfig struct {
 	// the absence of a policy cannot restore unlimited provider spending.
 	// Default false preserves the historical fail-open behaviour.
 	BudgetRequired bool
+
+	// BudgetRequiredTenants is the tenant-scoped override
+	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS): a comma-separated list of tenant
+	// UUIDs that fail closed even when BudgetRequired is false. Tenants not
+	// in the list keep the historical fail-open behaviour until their budgets
+	// have been provisioned.
+	BudgetRequiredTenants BudgetRequiredTenants
 
 	// Optional overrides for deterministic tests. Production wiring leaves
 	// these nil and the constructor substitutes time.Now + UUIDv7.
@@ -224,6 +236,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		EnforceToolsScreen:    cfg.EnforceToolsScreen,
 
 		BudgetRequired: cfg.BudgetRequired,
+
+		BudgetRequiredTenants: cfg.BudgetRequiredTenants,
 	})
 	if err != nil {
 		return nil, err
@@ -247,6 +261,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		embedder:       cfg.Embedder,
 
 		budgetRequired: cfg.BudgetRequired,
+
+		budgetRequiredTenants: cfg.BudgetRequiredTenants,
 	}, nil
 }
 

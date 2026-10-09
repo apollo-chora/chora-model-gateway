@@ -44,12 +44,14 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 		return EmbedFlowResponse{}, errors.New("embed: text required")
 	}
 
-	// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED): with
-	// the flag on, a tenant with NO active budget window is refused BEFORE
-	// the vendor call — the absence of a policy must not restore unlimited
-	// provider spending. Default (flag off) preserves the historical allow
+	// Fail-closed "budget required" mode: a tenant with NO active budget
+	// window is refused BEFORE the vendor call — the absence of a policy must
+	// not restore unlimited provider spending. The mode is global
+	// (CHORA_LLM_BUDGET_REQUIRED) or per-tenant
+	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS); the decision is made per request
+	// from req.TenantID. Default (both off) preserves the historical allow
 	// and skips the budget read entirely.
-	if s.budgetRequired {
+	if budgetRequiredFor(s.budgetRequired, s.budgetRequiredTenants, req.TenantID) {
 		budget, err := s.budget.GetTenantBudget(ctx, req.TenantID)
 		if err != nil {
 			return EmbedFlowResponse{}, fmt.Errorf("embed: budget repo unavailable: %w", err)
