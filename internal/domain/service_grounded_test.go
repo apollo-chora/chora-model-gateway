@@ -113,8 +113,15 @@ type groundedFakes struct {
 }
 
 // newGroundedTestService wires a Service with happy-path defaults for all
-// grounded ports. mods tweak the config for a specific case.
+// grounded ports (fail-closed "budget required" mode OFF). mods tweak the
+// fakes for a specific case.
 func newGroundedTestService(t *testing.T, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
+	return newGroundedTestServiceWithConfig(t, false, mods...)
+}
+
+// newGroundedTestServiceWithConfig is newGroundedTestService with the
+// fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED) settable.
+func newGroundedTestServiceWithConfig(t *testing.T, budgetRequired bool, mods ...func(f *groundedFakes)) (*domain.Service, *groundedFakes) {
 	t.Helper()
 
 	f := &groundedFakes{
@@ -161,6 +168,7 @@ func newGroundedTestService(t *testing.T, mods ...func(f *groundedFakes)) (*doma
 		Grounded:       f.grounded,
 		Mana:           f.mana,
 		EgressAudit:    f.audit,
+		BudgetRequired: budgetRequired,
 		Now:            fixedTime,
 		NewID:          func() string { return "gs-invocation-id" },
 	})
@@ -318,6 +326,37 @@ func TestGroundedSearch_BudgetBlock_Denies(t *testing.T) {
 	assert.Equal(t, 0, f.grounded.calls)
 	require.Len(t, f.audit.events, 1)
 	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
+}
+
+// Fail-closed "budget required" mode: flag ON + no active budget window ⇒
+// the grounded egress is denied BEFORE any web call, with the budget denial
+// reason + an audit event.
+func TestGroundedSearch_BudgetRequired_MissingWindow_Denies(t *testing.T) {
+	svc, f := newGroundedTestServiceWithConfig(t, true, func(f *groundedFakes) {
+		f.budget.state = nil // no active window
+	})
+	_, err := svc.GroundedSearch(context.Background(), groundedReq())
+	var gerr *domain.GroundedSearchError
+	require.ErrorAs(t, err, &gerr)
+	assert.Equal(t, domain.EgressDenyBudget, gerr.Reason)
+	assert.Contains(t, gerr.Detail, "budget required")
+	assert.Equal(t, 0, f.grounded.calls, "a missing budget window must not reach the web")
+	assert.Equal(t, 0, f.mana.quoteCalls, "the denial lands before the mana pre-flight")
+	require.Len(t, f.audit.events, 1)
+	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
+	assert.Equal(t, domain.EgressDenyBudget, f.audit.events[0].DenialReason)
+}
+
+// Flag OFF (default) + no active budget window ⇒ the historical allow is
+// preserved: the egress proceeds and the vendor is called.
+func TestGroundedSearch_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
+	svc, f := newGroundedTestServiceWithConfig(t, false, func(f *groundedFakes) {
+		f.budget.state = nil // no active window
+	})
+	res, err := svc.GroundedSearch(context.Background(), groundedReq())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, res.FinishReason)
+	assert.Equal(t, 1, f.grounded.calls)
 }
 
 func TestGroundedSearch_ManaInsufficient_InBandBlock(t *testing.T) {

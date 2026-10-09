@@ -15,8 +15,12 @@ import (
 //  2. Resolve invocation_id (caller-supplied or generated).
 //  3. Resolve model (default text-embedding-004) against the embedding
 //     allowlist; a generation model here is refused, never re-routed.
-//  4. Vendor dispatch through the EmbeddingClient port.
-//  5. Ledger: enqueue the canonical token-usage event with the
+//  4. Budget gate (fail-closed "budget required" mode only): with
+//     CHORA_LLM_BUDGET_REQUIRED, a missing active budget window refuses the
+//     embed before the vendor call. Default off — no budget read, historical
+//     allow preserved.
+//  5. Vendor dispatch through the EmbeddingClient port.
+//  6. Ledger: enqueue the canonical token-usage event with the
 //     vendor-reported input tokens, cost_micros 0 (no price attached by
 //     ruling) and Bypassed Armor markers (permissive entry; no Armor leg
 //     runs on a text-to-vector call). An un-ledgered embed FAILS: the
@@ -38,6 +42,21 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 	}
 	if strings.TrimSpace(req.Text) == "" {
 		return EmbedFlowResponse{}, errors.New("embed: text required")
+	}
+
+	// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED): with
+	// the flag on, a tenant with NO active budget window is refused BEFORE
+	// the vendor call — the absence of a policy must not restore unlimited
+	// provider spending. Default (flag off) preserves the historical allow
+	// and skips the budget read entirely.
+	if s.budgetRequired {
+		budget, err := s.budget.GetTenantBudget(ctx, req.TenantID)
+		if err != nil {
+			return EmbedFlowResponse{}, fmt.Errorf("embed: budget repo unavailable: %w", err)
+		}
+		if budget == nil {
+			return EmbedFlowResponse{}, errors.New("embed: no active LLM budget window for tenant; budget required (CHORA_LLM_BUDGET_REQUIRED)")
+		}
 	}
 
 	invocationID := req.InvocationID

@@ -49,6 +49,10 @@ type Service struct {
 	// ports; Embed fails loud at call-time when nil (never a silent
 	// fallback to direct Vertex).
 	embedder EmbeddingClient
+
+	// budgetRequired enables the fail-closed "budget required" mode for the
+	// GroundedSearch + Embed flows (see ServiceConfig.BudgetRequired).
+	budgetRequired bool
 }
 
 // ServiceConfig groups the ports + cross-cutting deps the gateway needs.
@@ -97,6 +101,13 @@ type ServiceConfig struct {
 	// callers to close a hole nothing currently reaches. Sourced from
 	// CHORA_ARMOR_ENFORCE_TOOLS_SCREEN.
 	EnforceToolsScreen bool
+
+	// BudgetRequired enables the fail-closed "budget required" mode
+	// (CHORA_LLM_BUDGET_REQUIRED) for the GroundedSearch + Embed flows: a
+	// tenant with NO active budget window is refused instead of allowed, so
+	// the absence of a policy cannot restore unlimited provider spending.
+	// Default false preserves the historical fail-open behaviour.
+	BudgetRequired bool
 
 	// Optional overrides for deterministic tests. Production wiring leaves
 	// these nil and the constructor substitutes time.Now + UUIDv7.
@@ -211,6 +222,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		EnforceContentsScreen: cfg.EnforceContentsScreen,
 		EnforceToolCallScreen: cfg.EnforceToolCallScreen,
 		EnforceToolsScreen:    cfg.EnforceToolsScreen,
+
+		BudgetRequired: cfg.BudgetRequired,
 	})
 	if err != nil {
 		return nil, err
@@ -232,6 +245,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		mana:           cfg.Mana,
 		egressAudit:    cfg.EgressAudit,
 		embedder:       cfg.Embedder,
+
+		budgetRequired: cfg.BudgetRequired,
 	}, nil
 }
 

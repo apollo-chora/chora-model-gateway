@@ -47,3 +47,33 @@ func TestLoadConfig_EmbedVertexLocationOverride(t *testing.T) {
 		t.Fatalf("embedVertexLocation = %q, want the env override", cfg.embedVertexLocation)
 	}
 }
+
+// Fail-closed "budget required" mode must default OFF: an unset flag keeps
+// the historical fail-open behaviour (a missing budget window allows).
+func TestLoadConfig_BudgetRequiredDefaultOff(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED", "")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.budgetRequired {
+		t.Fatalf("budgetRequired = true, want default false")
+	}
+}
+
+// CHORA_LLM_BUDGET_REQUIRED=true turns a missing active budget window into
+// a BLOCK across every provider-egress path.
+func TestLoadConfig_BudgetRequiredFlagOn(t *testing.T) {
+	setRequiredBootEnv(t)
+	t.Setenv("CHORA_LLM_BUDGET_REQUIRED", "true")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if !cfg.budgetRequired {
+		t.Fatalf("budgetRequired = false, want true when CHORA_LLM_BUDGET_REQUIRED=true")
+	}
+}

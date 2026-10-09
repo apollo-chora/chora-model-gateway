@@ -83,6 +83,7 @@ func run() error {
 		"model_armor_location", cfg.modelArmorLocation,
 		"environment", cfg.environment,
 		"gateway_version", cfg.gatewayVersion,
+		"budget_required", cfg.budgetRequired,
 	)
 
 	// ---------------------------------------------------------------------
@@ -309,6 +310,10 @@ func run() error {
 		// to the next target in the chain.
 		FallbackRetries:      cfg.fallbackRetries,
 		FallbackRetryBackoff: cfg.fallbackRetryBackoff,
+		// Fail-closed "budget required" mode: a missing active budget window
+		// is a BLOCK, not an allow — the absence of a policy must not restore
+		// unlimited provider spending. Default OFF.
+		BudgetRequired: cfg.budgetRequired,
 		Now:                  time.Now,
 		NewID:                newInvocationID,
 		// The model-registry resolver backs the capability / output-ceiling /
@@ -498,6 +503,7 @@ type runtimeConfig struct {
 	enforceToolsScreen       bool          // CHORA_ARMOR_ENFORCE_TOOLS_SCREEN, CHO-2391: block on the derived tool-DECLARATION Armor leg instead of auditing it
 	fallbackRetries          int           // CHORA_FALLBACK_RETRIES — extra same-provider attempts for a retryable failure (timeout / 429 / 5xx); 0 = advance to the next target
 	fallbackRetryBackoff     time.Duration // CHORA_FALLBACK_RETRY_BACKOFF_MS — delay before each same-provider retry
+	budgetRequired            bool          // CHORA_LLM_BUDGET_REQUIRED — fail-closed: a missing active budget window BLOCKS provider calls instead of allowing them (default false)
 	vendorHTTPTimeout        time.Duration
 	defaultTenantID          string // CHORA_DEFAULT_TENANT_ID — HTTP facade default tenant
 	defaultGCID              string // CHORA_DEFAULT_GCID — HTTP facade default GCID
@@ -521,6 +527,7 @@ func loadConfig() (runtimeConfig, error) {
 		enforceToolCallScreen:    os.Getenv("CHORA_ARMOR_ENFORCE_TOOL_CALL_SCREEN") == "true",
 		enforceToolsScreen:       os.Getenv("CHORA_ARMOR_ENFORCE_TOOLS_SCREEN") == "true",
 		fallbackRetries:          envInt("CHORA_FALLBACK_RETRIES", 0),
+		budgetRequired:            os.Getenv("CHORA_LLM_BUDGET_REQUIRED") == "true",
 		defaultTenantID:          os.Getenv("CHORA_DEFAULT_TENANT_ID"),
 		defaultGCID:              os.Getenv("CHORA_DEFAULT_GCID"),
 	}

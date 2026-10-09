@@ -175,6 +175,75 @@ func TestExecute_AccountingState_ArmorPreBlock_StaysClaimed(t *testing.T) {
 	assert.Equal(t, domain.AccountingClaimed, resp.AccountingState)
 }
 
+// ----------------------------------------------------------------------------
+// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED)
+// ----------------------------------------------------------------------------
+
+// Flag ON + no active budget window ⇒ the call is blocked with the budget
+// finish reason BEFORE any vendor dispatch; the detail names the missing
+// window (not the exhaustion message).
+func TestExecute_BudgetRequired_MissingWindow_BlocksBeforeDispatch(t *testing.T) {
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequired = true
+		cfg.Budget = &fakeBudget{} // nil state — no active window
+	})
+
+	resp, err := executor.Execute(context.Background(), happyExecuteRequest())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonBudgetBlock, resp.FinishReason)
+	assert.Contains(t, resp.FinishDetail, "budget required")
+	assert.Equal(t, domain.AccountingClaimed, resp.AccountingState)
+	assert.Equal(t, 0, vendor.calls, "a missing budget window must not reach the provider")
+}
+
+// Flag OFF (default) + no active budget window ⇒ the historical allow is
+// preserved: the call dispatches, settles and ledgers exactly as before.
+func TestExecute_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
+	executor, vendor, _, _, outbox, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.Budget = &fakeBudget{} // nil state — no active window
+	})
+
+	resp, err := executor.Execute(context.Background(), happyExecuteRequest())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, resp.FinishReason)
+	assert.Equal(t, 1, vendor.calls)
+	assert.Equal(t, domain.AccountingAccounted, resp.AccountingState)
+	require.Len(t, outbox.events, 1)
+}
+
+// Budget row present + flag ON ⇒ unchanged: an exhausted blocking window
+// still blocks, and the detail stays the exhaustion message (the
+// missing-window detail must not mask the real reason).
+func TestExecute_BudgetRequired_On_ExhaustedWindow_StillBlocks(t *testing.T) {
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequired = true
+		cfg.Budget = &fakeBudget{state: &domain.BudgetState{
+			TenantID:        "tenant-1",
+			BudgetUSDMicros: 1_000_000,
+			SpentUSDMicros:  2_000_000, // exhausted
+			Policy:          domain.BudgetPolicyBlock,
+		}}
+	})
+
+	resp, err := executor.Execute(context.Background(), happyExecuteRequest())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonBudgetBlock, resp.FinishReason)
+	assert.Contains(t, resp.FinishDetail, "exhausted")
+	assert.Equal(t, 0, vendor.calls)
+}
+
+// Budget row present, not exhausted + flag ON ⇒ unchanged allow.
+func TestExecute_BudgetRequired_On_ActiveWindow_Allows(t *testing.T) {
+	executor, vendor, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.BudgetRequired = true
+	})
+
+	resp, err := executor.Execute(context.Background(), happyExecuteRequest())
+	require.NoError(t, err)
+	assert.Equal(t, domain.FinishReasonComplete, resp.FinishReason)
+	assert.Equal(t, 1, vendor.calls)
+}
+
 // An Armor POST block short-circuits AFTER the provider succeeded but BEFORE
 // settlement, so the state stays at SUCCEEDED — the provider ran and the call
 // is billable, but the debit + outbox never committed.

@@ -369,6 +369,11 @@ type Executor struct {
 	// enforceToolsScreen promotes the CHO-2391 tool-DECLARATION leg to
 	// blocking. See ExecutorConfig.EnforceToolsScreen.
 	enforceToolsScreen bool
+
+	// budgetRequired enables the fail-closed "budget required" mode: a missing
+	// active budget window is a BLOCK, not an allow. Sourced from
+	// CHORA_LLM_BUDGET_REQUIRED.
+	budgetRequired bool
 }
 
 // ExecutorConfig groups the ports + cross-cutting deps the Executor needs.
@@ -458,6 +463,13 @@ type ExecutorConfig struct {
 	// callers to close a hole nothing currently reaches. Sourced from
 	// CHORA_ARMOR_ENFORCE_TOOLS_SCREEN.
 	EnforceToolsScreen bool
+
+	// BudgetRequired enables the fail-closed "budget required" mode
+	// (CHORA_LLM_BUDGET_REQUIRED): a tenant with NO active budget window is
+	// refused instead of allowed, so the absence of a policy cannot restore
+	// unlimited provider spending. Default false preserves the historical
+	// fail-open behaviour for every other tenant.
+	BudgetRequired bool
 
 	// DBTimeout bounds each database operation (budget read, idempotency
 	// claim, settlement debit + outbox). A slow DB must not consume the
@@ -553,6 +565,8 @@ func NewExecutor(cfg ExecutorConfig) (*Executor, error) {
 		enforceContentsScreen: cfg.EnforceContentsScreen,
 		enforceToolCallScreen: cfg.EnforceToolCallScreen,
 		enforceToolsScreen:    cfg.EnforceToolsScreen,
+
+		budgetRequired: cfg.BudgetRequired,
 	}, nil
 }
 
@@ -724,13 +738,26 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 
 	// Step 6 — decide budget action.
 	decision := BudgetAllow
+	budgetMissing := false
 	if budget != nil {
 		decision = budget.Decide()
 		if decision == BudgetDowngrade && budget.DowngradeToModel != "" {
 			policy.ResolvedLogicalModelID = budget.DowngradeToModel
 		}
+	} else {
+		budgetMissing = true
+		// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED):
+		// a missing active budget window is a BLOCK, not an allow — the
+		// absence of a policy must not restore unlimited provider spending.
+		if e.budgetRequired {
+			decision = BudgetBlock
+		}
 	}
 	if decision == BudgetBlock {
+		detail := "tenant LLM budget exhausted; policy=block"
+		if budgetMissing {
+			detail = "no active LLM budget window for tenant; budget required (CHORA_LLM_BUDGET_REQUIRED)"
+		}
 		return &ExecuteResponse{
 			InvocationID:    invocationID,
 			ArmorPre:        ArmorVerdictUnspecified, // never reached
@@ -738,7 +765,7 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 			FallbackChain:   []string{},
 			LatencyMs:       int32(e.now().Sub(start).Milliseconds()), // #nosec G115 -- elapsed ms since request start; bounded far below int32 (overflows only past ~24.8 days)
 			FinishReason:    FinishReasonBudgetBlock,
-			FinishDetail:    "tenant LLM budget exhausted; policy=block",
+			FinishDetail:    detail,
 			CompletedAt:     e.now(),
 			GatewayVersion:  e.gatewayVersion,
 			AccountingState: acctState,

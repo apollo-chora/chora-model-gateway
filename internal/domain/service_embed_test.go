@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/apollo-chora/chora-model-gateway/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // G1'-1 (owner-ruled 2026-08-07): embeddings ride the chokepoint. The Embed
@@ -20,10 +22,12 @@ type fakeEmbedVendor struct {
 	lastReq  domain.EmbedVendorRequest
 	response domain.EmbedVendorResponse
 	err      error
+	calls    int
 }
 
 func (f *fakeEmbedVendor) Family() domain.VendorFamily { return f.family }
 func (f *fakeEmbedVendor) EmbedText(_ context.Context, req domain.EmbedVendorRequest) (domain.EmbedVendorResponse, error) {
+	f.calls++
 	f.lastReq = req
 	return f.response, f.err
 }
@@ -40,6 +44,15 @@ func (f *fakeEmbedOutbox) EnqueueTokenUsageRecorded(_ context.Context, evt domai
 
 func newEmbedService(t *testing.T, embedder domain.EmbeddingClient, outbox domain.OutboxWriter) *domain.Service {
 	t.Helper()
+	return newEmbedServiceWithBudgetRequired(t, embedder, outbox, false)
+}
+
+// newEmbedServiceWithBudgetRequired is newEmbedService with the fail-closed
+// "budget required" mode (CHORA_LLM_BUDGET_REQUIRED) settable. The budget
+// fake carries a nil state (no active window) so the flag's effect is
+// observable.
+func newEmbedServiceWithBudgetRequired(t *testing.T, embedder domain.EmbeddingClient, outbox domain.OutboxWriter, budgetRequired bool) *domain.Service {
+	t.Helper()
 	svc, err := domain.NewService(domain.ServiceConfig{
 		Vendors:        []domain.VendorClient{&fakeVendor{family: domain.VendorFamilyVertexGemini}},
 		Armor:          &fakeArmor{},
@@ -48,6 +61,7 @@ func newEmbedService(t *testing.T, embedder domain.EmbeddingClient, outbox domai
 		Policies:       &fakePolicy{},
 		GatewayVersion: "chora-model-gateway:test",
 		Embedder:       embedder,
+		BudgetRequired: budgetRequired,
 		Now:            func() time.Time { return time.Unix(1754500000, 0) },
 		NewID:          func() string { return "01988888-8888-7888-8888-888888888888" },
 	})
@@ -190,4 +204,42 @@ func TestEmbed_defaultsModelAndDimensions(t *testing.T) {
 	if vendor.lastReq.OutputDimensions != 768 {
 		t.Errorf("default dimensionality must be 768; got %d", vendor.lastReq.OutputDimensions)
 	}
+}
+
+// ----------------------------------------------------------------------------
+// Fail-closed "budget required" mode (CHORA_LLM_BUDGET_REQUIRED)
+// ----------------------------------------------------------------------------
+
+// Flag ON + no active budget window ⇒ the embed is refused BEFORE the
+// vendor call; no vector, no ledger row.
+func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
+	vendor := &fakeEmbedVendor{
+		family:   domain.VendorFamilyVertexGemini,
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+	}
+	outbox := &fakeEmbedOutbox{}
+	svc := newEmbedServiceWithBudgetRequired(t, vendor, outbox, true)
+
+	_, err := svc.Embed(context.Background(), validEmbedRequest())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "budget required")
+	assert.Equal(t, 0, vendor.calls, "a missing budget window must not reach the provider")
+	assert.Len(t, outbox.events, 0, "a refused embed must not ledger")
+}
+
+// Flag OFF (default) + no active budget window ⇒ the historical allow is
+// preserved: the vendor is called and the ledger row is written.
+func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
+	vendor := &fakeEmbedVendor{
+		family:   domain.VendorFamilyVertexGemini,
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+	}
+	outbox := &fakeEmbedOutbox{}
+	svc := newEmbedServiceWithBudgetRequired(t, vendor, outbox, false)
+
+	resp, err := svc.Embed(context.Background(), validEmbedRequest())
+	require.NoError(t, err)
+	assert.Len(t, resp.Values, 1)
+	assert.Equal(t, 1, vendor.calls)
+	assert.Len(t, outbox.events, 1)
 }
