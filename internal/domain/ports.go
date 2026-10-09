@@ -33,9 +33,11 @@ type VendorClient interface {
 }
 
 // EmbeddingClient produces dense text embeddings via a vendor's embedding
-// surface (G1'-1). Registered separately from VendorClient because
-// embeddings carry no completion/finish-reason semantics. ONE
-// implementation for v1 (internal/adapter/vendors/vertexembed).
+// surface (G1'-1). Registered per VendorFamily — the Embed flow resolves the
+// logical model through the model registry and dispatches through the client
+// for the RESOLVED provider family, so an OpenRouter entry is served by the
+// OpenAI-compatible adapter and never by whatever adapter happens to be
+// constructed.
 type EmbeddingClient interface {
 	// Family names the vendor family for ledger attribution.
 	Family() VendorFamily

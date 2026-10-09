@@ -158,8 +158,13 @@ func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (
 	if base == "" {
 		base = fmt.Sprintf("https://%s-aiplatform.googleapis.com", c.location)
 	}
+	// The publisher model is the RESOLVED registry upstream_model when the
+	// dispatcher set one, else the logical id — the same rule the OpenAI
+	// adapter applies, so a registry entry cannot be silently re-routed to a
+	// different publisher model under an approved logical id.
+	model := upstreamModel(req)
 	url := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-		base, c.project, c.location, string(req.LogicalModelID))
+		base, c.project, c.location, model)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -196,9 +201,20 @@ func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (
 	}
 	return domain.EmbedVendorResponse{
 		Values:       out.Predictions[0].Embeddings.Values,
-		ModelVersion: string(req.LogicalModelID),
+		ModelVersion: model,
 		InputTokens:  out.Predictions[0].Embeddings.Statistics.TokenCount,
 	}, nil
+}
+
+// upstreamModel returns the model name to send upstream: the resolved
+// registry upstream_model when the dispatcher set one, else the logical id.
+// Shared shape with the OpenAI adapter's helper (the packages do not import
+// each other).
+func upstreamModel(req domain.EmbedVendorRequest) string {
+	if s := strings.TrimSpace(req.UpstreamModel); s != "" {
+		return s
+	}
+	return string(req.LogicalModelID)
 }
 
 // Compile-time port guarantee.

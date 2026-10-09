@@ -597,6 +597,77 @@ func TestOpenAI_EmbedText(t *testing.T) {
 	assert.InDelta(t, 0.1, resp.Values[0], 0.001)
 }
 
+// Release B: the adapter must dispatch to the RESOLVED registry route, not to
+// the endpoint it was constructed with. The domain Embed flow resolves the
+// logical model and hands the adapter the registry's upstream_model and
+// base_url; a logical id is an alias, so `text-embedding-004` here is served
+// from the OpenRouter upstream the registry declares.
+func TestOpenAI_EmbedText_ResolvedRouteOverridesConstructionEndpoint(t *testing.T) {
+	var capturedBody map[string]any
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		_, _ = w.Write([]byte(`{
+			"model": "liquid/lfm-2.5-embedding-350m:free",
+			"data": [{"embedding": [0.1, 0.2, 0.3, 0.4], "index": 0}],
+			"usage": {"prompt_tokens": 11}
+		}`))
+	}))
+	defer srv.Close()
+
+	// Constructed with an endpoint the resolved route must NOT use.
+	c, err := openai.New(openai.Config{
+		HTTPClient: srv.Client(),
+		Secrets:    stubSecrets{byoa: "k"},
+		Endpoint:   "https://api.openai.com/v1",
+	})
+	require.NoError(t, err)
+
+	resp, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{
+		LogicalModelID:   "text-embedding-004",
+		UpstreamModel:    "liquid/lfm-2.5-embedding-350m:free",
+		BaseURL:          srv.URL,
+		Text:             "adding fractions with unlike denominators",
+		OutputDimensions: 1024,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "/embeddings", capturedPath)
+	assert.Equal(t, "liquid/lfm-2.5-embedding-350m:free", capturedBody["model"],
+		"the wire model must be the registry upstream_model, not the logical id")
+	assert.Equal(t, "adding fractions with unlike denominators", capturedBody["input"])
+	assert.Equal(t, float64(1024), capturedBody["dimensions"],
+		"the requested dimensionality must be preserved")
+
+	assert.Equal(t, "liquid/lfm-2.5-embedding-350m:free", resp.ModelVersion)
+	assert.Equal(t, int64(11), resp.InputTokens)
+	assert.Len(t, resp.Values, 4)
+}
+
+// With no resolved route supplied the adapter falls back to its construction
+// endpoint and the logical id — the behaviour of a dispatcher that has no
+// registry to resolve against.
+func TestOpenAI_EmbedText_NoResolvedRouteUsesConstructionEndpoint(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		_, _ = w.Write([]byte(`{"model": "text-embedding-3-small", "data": [{"embedding": [0.1], "index": 0}], "usage": {"prompt_tokens": 1}}`))
+	}))
+	defer srv.Close()
+
+	c, err := openai.New(openai.Config{HTTPClient: srv.Client(), Secrets: stubSecrets{byoa: "k"}, Endpoint: srv.URL})
+	require.NoError(t, err)
+
+	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
+		LogicalModelID: "text-embedding-3-small",
+		Text:           "hello",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "text-embedding-3-small", capturedBody["model"])
+}
+
 func TestOpenAI_EmbedText_NoDimensions(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

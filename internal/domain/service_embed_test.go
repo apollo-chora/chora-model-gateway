@@ -15,7 +15,14 @@ import (
 // G1'-1 (owner-ruled 2026-08-07): embeddings ride the chokepoint. The Embed
 // flow must ledger every call (that is the point of the re-route), attach no
 // price, run no Armor leg (permissive entry, Bypassed markers), and fail
-// loud when unwired rather than silently falling back to direct Vertex.
+// loud when unwired rather than silently falling back to an unverified
+// adapter.
+//
+// Release B: the flow resolves the logical model through the model registry
+// and dispatches through the adapter for the RESOLVED provider family, so the
+// registry — not the logical id's name shape — decides the route. The fakes
+// below are therefore OpenAI-family: that is what the deployment's embedding
+// entry declares.
 
 type fakeEmbedVendor struct {
 	family   domain.VendorFamily
@@ -42,6 +49,34 @@ func (f *fakeEmbedOutbox) EnqueueTokenUsageRecorded(_ context.Context, evt domai
 	return f.err
 }
 
+// embedClients adapts the single-embedder test helper to the per-family
+// table: a nil embedder means "nothing wired", which is itself a case under
+// test.
+func embedClients(embedder domain.EmbeddingClient) []domain.EmbeddingClient {
+	if embedder == nil {
+		return nil
+	}
+	return []domain.EmbeddingClient{embedder}
+}
+
+// embedModelResolver is the test registry: the deployment's embedding route.
+// The logical id `text-embedding-004` is an ALIAS — the entry behind it is an
+// OpenAI-provider upstream, not a Google publisher model.
+func embedModelResolver() *mapModelResolver {
+	return &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
+		"text-embedding-004": {
+			ID:             "text-embedding-004",
+			Vendor:         domain.VendorFamilyOpenAI,
+			UpstreamModel:  "text-embedding-004",
+			BaseURL:        "https://api.openai.com/v1",
+			Capabilities:   []string{"embeddings"},
+			APIKeyEnv:      "EMBEDDING_LLM_API_KEY",
+			APIKey:         "test-key",
+			FallbackIDs:    nil,
+		},
+	}}
+}
+
 func newEmbedService(t *testing.T, embedder domain.EmbeddingClient, outbox domain.OutboxWriter) *domain.Service {
 	t.Helper()
 	return newEmbedServiceWithConfig(t, false, nil, embedder, outbox)
@@ -55,13 +90,14 @@ func newEmbedService(t *testing.T, embedder domain.EmbeddingClient, outbox domai
 func newEmbedServiceWithConfig(t *testing.T, budgetRequired bool, tenants domain.BudgetRequiredTenants, embedder domain.EmbeddingClient, outbox domain.OutboxWriter, mods ...func(cfg *domain.ServiceConfig)) *domain.Service {
 	t.Helper()
 	cfg := domain.ServiceConfig{
-		Vendors:        []domain.VendorClient{&fakeVendor{family: domain.VendorFamilyVertexGemini}},
+		Vendors:        []domain.VendorClient{&fakeVendor{family: domain.VendorFamilyOpenAI}},
 		Armor:          &fakeArmor{},
 		Budget:         &fakeBudget{},
 		Outbox:         outbox,
 		Policies:       &fakePolicy{},
 		GatewayVersion: "chora-model-gateway:test",
-		Embedder:       embedder,
+		Embedders:      embedClients(embedder),
+		Models:         embedModelResolver(),
 		BudgetRequired: budgetRequired,
 		BudgetRequiredTenants: tenants,
 		Now:            func() time.Time { return time.Unix(1754500000, 0) },
@@ -91,7 +127,7 @@ func validEmbedRequest() domain.EmbedFlowRequest {
 
 func TestEmbed_happyPathLedgersWithZeroCostAndBypassedMarkers(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family: domain.VendorFamilyVertexGemini,
+		family: domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{
 			Values:       []float32{0.1, 0.2, 0.3},
 			ModelVersion: "text-embedding-004",
@@ -137,7 +173,7 @@ func TestEmbed_happyPathLedgersWithZeroCostAndBypassedMarkers(t *testing.T) {
 }
 
 func TestEmbed_refusesMissingRequiredFields(t *testing.T) {
-	svc := newEmbedService(t, &fakeEmbedVendor{family: domain.VendorFamilyVertexGemini}, &fakeEmbedOutbox{})
+	svc := newEmbedService(t, &fakeEmbedVendor{family: domain.VendorFamilyOpenAI}, &fakeEmbedOutbox{})
 	cases := map[string]func(*domain.EmbedFlowRequest){
 		"tenant": func(r *domain.EmbedFlowRequest) { r.TenantID = "" },
 		"gcid":   func(r *domain.EmbedFlowRequest) { r.GCID = "" },
@@ -154,7 +190,7 @@ func TestEmbed_refusesMissingRequiredFields(t *testing.T) {
 }
 
 func TestEmbed_refusesNonEmbeddingModel(t *testing.T) {
-	svc := newEmbedService(t, &fakeEmbedVendor{family: domain.VendorFamilyVertexGemini}, &fakeEmbedOutbox{})
+	svc := newEmbedService(t, &fakeEmbedVendor{family: domain.VendorFamilyOpenAI}, &fakeEmbedOutbox{})
 	req := validEmbedRequest()
 	req.LogicalModelID = "gemini-2.5-flash"
 	_, err := svc.Embed(context.Background(), req)
@@ -166,16 +202,38 @@ func TestEmbed_refusesNonEmbeddingModel(t *testing.T) {
 	}
 }
 
+// No embedding adapter wired at all: the flow must fail loud rather than
+// dispatch through an unverified adapter.
 func TestEmbed_unwiredEmbedderFailsLoud(t *testing.T) {
-	svc := newEmbedService(t, nil, &fakeEmbedOutbox{})
-	if _, err := svc.Embed(context.Background(), validEmbedRequest()); err == nil {
-		t.Fatal("nil embedder must fail loud, not fall back to direct Vertex")
+	svc := newEmbedServiceWithConfig(t, false, nil, nil, &fakeEmbedOutbox{})
+	_, err := svc.Embed(context.Background(), validEmbedRequest())
+	if err == nil {
+		t.Fatal("an unwired embedding adapter must fail loud, not dispatch through an unverified route")
 	}
+	var noProvider *domain.NoProviderError
+	if !errors.As(err, &noProvider) {
+		t.Fatalf("the refusal must name the missing adapter; got %v", err)
+	}
+}
+
+// No model registry resolver wired: the flow must fail loud rather than fall
+// back to a hard-wired adapter.
+func TestEmbed_unwiredRegistryFailsLoud(t *testing.T) {
+	vendor := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}}}
+	svc := newEmbedServiceWithConfig(t, false, nil, vendor, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
+		cfg.Models = nil
+	})
+	_, err := svc.Embed(context.Background(), validEmbedRequest())
+	if err == nil {
+		t.Fatal("an unwired registry resolver must fail loud, not dispatch through a hard-wired adapter")
+	}
+	assert.Contains(t, err.Error(), "no model registry resolver")
+	assert.Equal(t, 0, vendor.calls)
 }
 
 func TestEmbed_outboxFailureFailsLoud(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	svc := newEmbedService(t, vendor, &fakeEmbedOutbox{err: errors.New("pg down")})
@@ -185,7 +243,7 @@ func TestEmbed_outboxFailureFailsLoud(t *testing.T) {
 }
 
 func TestEmbed_vendorErrorSurfaces(t *testing.T) {
-	vendor := &fakeEmbedVendor{family: domain.VendorFamilyVertexGemini, err: errors.New("predict 503")}
+	vendor := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, err: errors.New("predict 503")}
 	svc := newEmbedService(t, vendor, &fakeEmbedOutbox{})
 	if _, err := svc.Embed(context.Background(), validEmbedRequest()); err == nil {
 		t.Fatal("vendor error must surface")
@@ -194,7 +252,7 @@ func TestEmbed_vendorErrorSurfaces(t *testing.T) {
 
 func TestEmbed_defaultsModelAndDimensions(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	svc := newEmbedService(t, vendor, &fakeEmbedOutbox{})
@@ -220,7 +278,7 @@ func TestEmbed_defaultsModelAndDimensions(t *testing.T) {
 // vendor call; no vector, no ledger row.
 func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
@@ -237,7 +295,7 @@ func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
 // preserved: the vendor is called and the ledger row is written.
 func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
@@ -258,7 +316,7 @@ func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 // refused BEFORE the vendor call; no vector, no ledger row.
 func TestEmbed_BudgetRequired_TenantListed_RefusesDespiteGlobalOff(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
@@ -276,7 +334,7 @@ func TestEmbed_BudgetRequired_TenantListed_RefusesDespiteGlobalOff(t *testing.T)
 // written.
 func TestEmbed_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}
@@ -293,7 +351,7 @@ func TestEmbed_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
 // fails closed on a MISSING window.
 func TestEmbed_BudgetRequired_TenantListed_ActiveWindow_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
-		family:   domain.VendorFamilyVertexGemini,
+		family:   domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
 	}
 	outbox := &fakeEmbedOutbox{}

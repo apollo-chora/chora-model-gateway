@@ -167,6 +167,20 @@ func mapEmbedError(err error) error {
 	if us := domain.UpstreamStatusOf(err); us != nil {
 		return mapUpstreamStatus(*us, "")
 	}
+	// Registry / policy refusals discovered BEFORE any provider call: the
+	// logical model id is unknown to the registry, the resolved entry does not
+	// advertise the embeddings capability, its credential reference is empty,
+	// or no embedding adapter is wired for the resolved provider. These are
+	// configuration faults (the Invoke path maps the same set to
+	// FailedPrecondition), not vendor failures — and nothing was billed.
+	var cfgErr *domain.ConfigError
+	var capErr *domain.CapabilityError
+	var credErr *domain.CredentialError
+	var noProvider *domain.NoProviderError
+	if errors.As(err, &cfgErr) || errors.As(err, &capErr) ||
+		errors.As(err, &credErr) || errors.As(err, &noProvider) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
 	// For non-upstream errors, the gateway-controlled message is safe to
 	// relay. The full error (with the upstream body) is available in the
 	// logs for internal debugging.

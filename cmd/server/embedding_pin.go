@@ -78,6 +78,16 @@ func (c embeddingPinConfig) domainPin() *domain.EmbeddingRoutePin {
 	return &domain.EmbeddingRoutePin{LogicalID: domain.LogicalModelID(c.LogicalID)}
 }
 
+// embedderFamilies lists the vendor families of the wired embedding adapters,
+// for the boot log.
+func embedderFamilies(embedders []domain.EmbeddingClient) []string {
+	out := make([]string, 0, len(embedders))
+	for _, e := range embedders {
+		out = append(out, string(e.Family()))
+	}
+	return out
+}
+
 // verifyEmbeddingRoutePin asserts that the registry the gateway actually
 // loaded maps the pinned logical id to the approved upstream model, with no
 // fallbacks, and that the wired embedding adapter can honour that entry.
@@ -88,7 +98,7 @@ func (c embeddingPinConfig) domainPin() *domain.EmbeddingRoutePin {
 // remaining ones close the three other ways the route could drift: a registry
 // fallback to a paid model, a different provider endpoint, and an adapter that
 // ignores the registry's upstream_model entirely.
-func verifyEmbeddingRoutePin(reg registry.Registry, embedder domain.EmbeddingClient, cfg embeddingPinConfig) error {
+func verifyEmbeddingRoutePin(reg registry.Registry, embedders []domain.EmbeddingClient, cfg embeddingPinConfig) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -125,12 +135,18 @@ func verifyEmbeddingRoutePin(reg registry.Registry, embedder domain.EmbeddingCli
 	// the EmbeddingClient port, which never consults the registry's
 	// upstream_model, so a mismatched adapter would serve a DIFFERENT upstream
 	// under the approved logical id.
-	if embedder == nil {
+	if len(embedders) == 0 {
 		return fmt.Errorf("embedding route pin: no embedding adapter is wired")
 	}
-	if expected, ok := providerVendorFamily(spec.Provider); ok && embedder.Family() != expected {
-		return fmt.Errorf("embedding route pin: the wired embedding adapter is %q but logical id %q declares provider %q (adapter %q); the adapter does not honour the registry upstream %q",
-			embedder.Family(), cfg.LogicalID, spec.Provider, expected, spec.UpstreamModel)
+	adapters := make(map[domain.VendorFamily]domain.EmbeddingClient, len(embedders))
+	for _, e := range embedders {
+		adapters[e.Family()] = e
+	}
+	if expected, ok := providerVendorFamily(spec.Provider); ok {
+		if _, wired := adapters[expected]; !wired {
+			return fmt.Errorf("embedding route pin: logical id %q declares provider %q (upstream %q) but no embedding adapter for that family is wired, so the registry route would not be honoured",
+				cfg.LogicalID, spec.Provider, spec.UpstreamModel)
+		}
 	}
 	return nil
 }

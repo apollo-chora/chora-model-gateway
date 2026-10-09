@@ -43,6 +43,8 @@ func toModelInfo(spec modelregistry.ModelSpec) domain.ModelInfo {
 	info := domain.ModelInfo{
 		ID:             spec.ID,
 		Vendor:         domain.VendorFamily(spec.Provider),
+		UpstreamModel:  spec.UpstreamModel,
+		BaseURL:        spec.BaseURL,
 		Capabilities:   spec.Capabilities,
 		MaxOutputTokens: spec.MaxOutputTokens,
 		APIKeyEnv:      spec.APIKeyEnv,

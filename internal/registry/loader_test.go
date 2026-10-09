@@ -177,16 +177,92 @@ models:
 	assert.Contains(t, err.Error(), `provider "" is not one of: openai, anthropic`)
 }
 
-func TestLoadRejectsMissingBaseURL(t *testing.T) {
+// A row may omit base_url when the deployment supplies the endpoint through
+// the role-based env config. The deployment registry
+// (chora-stack/config/model-gateway/models.prod.yaml) declares no base_url on
+// any row, so this must load — refusing it is what stopped the Go gateway
+// from booting on the deployment registry.
+func TestLoadAcceptsMissingBaseURLWithRoleBaseURL(t *testing.T) {
 	clearEnvRoleVars(t)
+	t.Setenv("TEXT_LLM_BASE_URL", "https://role.test/v1")
+	t.Setenv("EMBEDDING_LLM_BASE_URL", "https://openrouter.ai/api/v1")
+
 	path := writeRegistry(t, `
 models:
-  - id: a
+  - id: text-model
     provider: openai
+    capabilities: [chat]
+  - id: embed-model
+    provider: openai
+    capabilities: [embeddings]
+`)
+	reg, err := registry.Load(path)
+	require.NoError(t, err)
+
+	text, ok := reg.Get("text-model")
+	require.True(t, ok)
+	assert.Equal(t, "https://role.test/v1", text.BaseURL)
+	assert.Equal(t, "https://role.test/v1/chat/completions", text.ChatURL())
+
+	embed, ok := reg.Get("embed-model")
+	require.True(t, ok)
+	assert.Equal(t, "https://openrouter.ai/api/v1", embed.BaseURL)
+	assert.Equal(t, "https://openrouter.ai/api/v1/embeddings", embed.EmbeddingsURL())
+}
+
+// The inherited role endpoint is validated exactly like a declared one: a
+// deployment that points a role at an internal address still fails boot.
+func TestLoadRejectsUnresolvableRoleBaseURL(t *testing.T) {
+	clearEnvRoleVars(t)
+	t.Setenv("EMBEDDING_LLM_BASE_URL", "http://127.0.0.1:8080")
+
+	path := writeRegistry(t, `
+models:
+  - id: embed-model
+    provider: openai
+    capabilities: [embeddings]
 `)
 	_, err := registry.Load(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "base_url is required")
+	assert.Contains(t, err.Error(), "private/internal ip")
+}
+
+// A row with no base_url and no role endpoint is a self-hosted entry. It
+// loads (the env-role path has always allowed an empty base URL); the
+// dispatch-time check is what refuses to guess an endpoint for it.
+func TestLoadAcceptsMissingBaseURLWithoutRoleBaseURL(t *testing.T) {
+	clearEnvRoleVars(t)
+
+	path := writeRegistry(t, `
+models:
+  - id: self-hosted
+    provider: openai
+    upstream_model: llama3.1:8b
+    capabilities: [chat]
+`)
+	reg, err := registry.Load(path)
+	require.NoError(t, err)
+	spec, ok := reg.Get("self-hosted")
+	require.True(t, ok)
+	assert.Equal(t, "", spec.BaseURL)
+}
+
+// A declared base_url always wins over the role endpoint.
+func TestLoadDeclaredBaseURLWinsOverRole(t *testing.T) {
+	clearEnvRoleVars(t)
+	t.Setenv("TEXT_LLM_BASE_URL", "https://role.test/v1")
+
+	path := writeRegistry(t, `
+models:
+  - id: text-model
+    provider: openai
+    base_url: https://declared.test/v1
+`)
+	reg, err := registry.Load(path)
+	require.NoError(t, err)
+	spec, ok := reg.Get("text-model")
+	require.True(t, ok)
+	assert.Equal(t, "https://declared.test/v1", spec.BaseURL)
 }
 
 func TestLoadRejectsMissingID(t *testing.T) {

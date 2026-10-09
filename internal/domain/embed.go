@@ -72,7 +72,18 @@ type EmbedFlowResponse struct {
 
 // EmbedVendorRequest is what the embedding vendor adapter receives.
 type EmbedVendorRequest struct {
-	LogicalModelID   LogicalModelID
+	// LogicalModelID is the caller's logical model id (an alias).
+	LogicalModelID LogicalModelID
+
+	// UpstreamModel is the resolved registry upstream_model — the model name
+	// the provider actually speaks. Empty means LogicalModelID, which is the
+	// behaviour of a dispatcher that has no registry to resolve against.
+	UpstreamModel string
+
+	// BaseURL is the resolved registry base_url — the API root to dispatch
+	// to. Empty means the adapter's own configured endpoint.
+	BaseURL string
+
 	Text             string
 	TaskType         string
 	OutputDimensions int32

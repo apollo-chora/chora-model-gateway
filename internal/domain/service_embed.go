@@ -21,7 +21,12 @@ import (
 //     CHORA_LLM_BUDGET_REQUIRED, a missing active budget window refuses the
 //     embed before the vendor call. Default off — no budget read, historical
 //     allow preserved.
-//  5. Vendor dispatch through the EmbeddingClient port.
+//  5. Route resolution: the logical model id is resolved through the model
+//     registry — the same authoritative mechanism the Invoke flow uses —
+//     and the embed is dispatched through the embedding adapter registered
+//     for the RESOLVED provider family, with the resolved upstream model and
+//     base URL. A logical id is an alias, not a route: nothing about the
+//     id's name shape says which provider serves it.
 //  6. Ledger: enqueue the canonical token-usage event with the
 //     vendor-reported input tokens, cost_micros 0 (no price attached by
 //     ruling) and Bypassed Armor markers (permissive entry; no Armor leg
@@ -30,9 +35,6 @@ import (
 func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowResponse, error) {
 	start := s.now()
 
-	if s.embedder == nil {
-		return EmbedFlowResponse{}, errors.New("model gateway: Embed called but no EmbeddingClient is wired (fail loud; the direct-Vertex fallback is closed)")
-	}
 	if strings.TrimSpace(req.TenantID) == "" {
 		return EmbedFlowResponse{}, errors.New("embed: tenant_id required")
 	}
@@ -97,14 +99,7 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 		dims = defaultEmbeddingDimensions
 	}
 
-	vendorResp, err := s.embedder.EmbedText(ctx, EmbedVendorRequest{
-		LogicalModelID:   model,
-		Text:             req.Text,
-		TaskType:         req.TaskType,
-		OutputDimensions: dims,
-		TenantID:         req.TenantID,
-		Traceparent:      req.Traceparent,
-	})
+	vendorResp, family, err := s.embedThroughRegistry(ctx, model, req, dims)
 	if err != nil {
 		return EmbedFlowResponse{}, fmt.Errorf("embed: vendor dispatch: %w", err)
 	}
@@ -127,8 +122,8 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 		AgentID:        req.AgentID,
 		ActionCode:     req.AgentID,
 		RecordedAt:     s.now(),
-		Vendor:         string(s.embedder.Family()),
-		FallbackChain:  []string{fmt.Sprintf("%s:%s", s.embedder.Family(), model)},
+		Vendor:         string(family),
+		FallbackChain:  []string{fmt.Sprintf("%s:%s", family, model)},
 		ArmorPre:       ArmorVerdictBypassed,
 		ArmorPost:      ArmorVerdictBypassed,
 		GatewayVersion: s.gatewayVersion,
@@ -142,11 +137,111 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 	return EmbedFlowResponse{
 		InvocationID:   invocationID,
 		Values:         vendorResp.Values,
-		Vendor:         string(s.embedder.Family()),
+		Vendor:         string(family),
 		ModelVersion:   vendorResp.ModelVersion,
 		Usage:          usage,
 		LatencyMs:      int32(s.now().Sub(start).Milliseconds()), // #nosec G115 -- elapsed ms, bounded far below int32
 		CompletedAt:    s.now(),
 		GatewayVersion: s.gatewayVersion,
 	}, nil
+}
+
+// ----------------------------------------------------------------------------
+// Registry-directed dispatch (Release B)
+// ----------------------------------------------------------------------------
+
+// embedThroughRegistry resolves the logical model through the model registry
+// — the same authoritative mechanism the Invoke flow uses — and dispatches
+// through the embedding adapter registered for the RESOLVED provider family.
+//
+// A logical id is an alias, not a route. Nothing about the id's name shape
+// says which provider serves it: `text-embedding-004` is the deployment's
+// embedding ROUTE, and the registry entry behind it names an OpenRouter
+// upstream. The resolved configuration therefore decides provider, upstream
+// model, base URL and credential — and an entry whose provider has no wired
+// embedding adapter is refused rather than re-routed to whatever adapter
+// happens to be constructed.
+//
+// Returns the vendor response plus the family of the adapter that actually
+// served it, so the ledger attributes the route that ran.
+func (s *Service) embedThroughRegistry(ctx context.Context, model LogicalModelID, req EmbedFlowRequest, dims int32) (EmbedVendorResponse, VendorFamily, error) {
+	if s.models == nil {
+		return EmbedVendorResponse{}, "", errors.New("embed: no model registry resolver is wired; refusing to dispatch through an unverified adapter")
+	}
+	primary, err := s.models.Resolve(ctx, model)
+	if err != nil {
+		return EmbedVendorResponse{}, "", &ConfigError{
+			Detail: fmt.Sprintf("embed: model %q is not in the registry", model),
+			Inner:  err,
+		}
+	}
+
+	// The primary first, then the registry-declared fallbacks. Every target
+	// goes through the SAME resolution + policy checks, so a fallback cannot
+	// land on a provider or model the primary was refused for.
+	ids := make([]LogicalModelID, 0, 1+len(primary.FallbackIDs))
+	ids = append(ids, model)
+	ids = append(ids, primary.FallbackIDs...)
+
+	var lastErr error
+	for i, id := range ids {
+		info := primary
+		if i > 0 {
+			resolved, err := s.models.Resolve(ctx, id)
+			if err != nil {
+				lastErr = &ConfigError{
+					Detail: fmt.Sprintf("embed: fallback %q is not in the registry", id),
+					Inner:  err,
+				}
+				continue
+			}
+			info = resolved
+		}
+		if err := checkEmbedTarget(info, id); err != nil {
+			lastErr = err
+			continue
+		}
+		client, ok := s.embedders[info.Vendor]
+		if !ok {
+			lastErr = &NoProviderError{Family: info.Vendor}
+			continue
+		}
+		resp, err := client.EmbedText(ctx, EmbedVendorRequest{
+			LogicalModelID:   model,
+			UpstreamModel:    info.UpstreamModel,
+			BaseURL:          info.BaseURL,
+			Text:             req.Text,
+			TaskType:         req.TaskType,
+			OutputDimensions: dims,
+			TenantID:         req.TenantID,
+			Traceparent:      req.Traceparent,
+		})
+		if err == nil {
+			return resp, client.Family(), nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("embed: no embedding target could be resolved")
+	}
+	return EmbedVendorResponse{}, "", lastErr
+}
+
+// checkEmbedTarget applies the embed policy checks to one resolved registry
+// entry: it must advertise the embeddings capability, carry a usable
+// credential reference, and name a dispatchable endpoint. The base-URL check
+// is the one that closes the "silent paid route" hole: an entry with no
+// resolvable endpoint is refused rather than dispatched to whatever the
+// adapter happens to be constructed with.
+func checkEmbedTarget(info ModelInfo, model LogicalModelID) error {
+	if !info.Supports("embeddings") {
+		return &CapabilityError{Model: model, Capability: "embeddings"}
+	}
+	if info.APIKeyEnv != "" && info.APIKey == "" {
+		return &CredentialError{Model: model, APIKeyEnv: info.APIKeyEnv}
+	}
+	if info.BaseURL == "" {
+		return fmt.Errorf("embed: registry entry %q declares no base_url and no role base URL is configured; refusing rather than dispatching to an unverified endpoint", model)
+	}
+	return nil
 }

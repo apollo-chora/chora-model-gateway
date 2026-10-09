@@ -172,6 +172,14 @@ func run() error {
 	// location and token provider as the gemini adapter; the domain Embed
 	// flow enters at permissive (no Armor leg, Bypassed markers) and
 	// attaches no price, but every call produces a ledger row.
+	//
+	// The Vertex publisher adapter is RETAINED but is no longer the embed
+	// route: the Embed flow resolves the logical model through the model
+	// registry and dispatches through the adapter registered for the
+	// RESOLVED provider family. The registry's provider set is openai /
+	// anthropic only, so no registry entry can select the Vertex adapter —
+	// which is exactly the point. `text-embedding-004` is the deployment's
+	// embedding ROUTE (an alias), not a claim about the vendor.
 	embedClient, err := vertexembed.New(vertexembed.Config{
 		HTTPClient: &http.Client{Timeout: cfg.vendorHTTPTimeout},
 		Tokens:     tokens,
@@ -237,19 +245,26 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("model registry: %w", err)
 	}
+	// Embedding adapters, registered per vendor family. The OpenAI-compatible
+	// adapter serves the deployment's embedding route (an OpenRouter upstream
+	// reached through the resolved registry base_url); the Vertex publisher
+	// adapter stays wired for a registry entry that declares it. Which one
+	// answers a given Embed call is decided by the registry, never here.
+	embedders := []domain.EmbeddingClient{openaiClient, embedClient}
+
 	// Demo-deployment embedding-route pin: assert the EFFECTIVE loaded registry
 	// still maps the pinned logical id to the approved upstream model, with no
 	// fallbacks, and that the wired embedding adapter honours that entry. This
 	// is the file the running gateway actually loaded (CHORA_MODEL_REGISTRY),
 	// not a repo copy. Disabled by default; when enabled a mismatch fails boot.
-	if err := verifyEmbeddingRoutePin(modelRegistry, embedClient, cfg.embeddingPin); err != nil {
+	if err := verifyEmbeddingRoutePin(modelRegistry, embedders, cfg.embeddingPin); err != nil {
 		return fmt.Errorf("embedding route pin: %w", err)
 	}
 	if cfg.embeddingPin.Enabled {
 		slog.Info("embedding route pin verified",
 			"logical_id", cfg.embeddingPin.LogicalID,
 			"upstream_model", cfg.embeddingPin.UpstreamModel,
-			"adapter_family", string(embedClient.Family()),
+			"embedding_adapters", embedderFamilies(embedders),
 			"registry", envOr("CHORA_MODEL_REGISTRY", "config/models.yaml"),
 		)
 	}
@@ -303,7 +318,7 @@ func run() error {
 		// record for a Model Armor BLOCK. Same *pg.Repo, same outbox_events
 		// table; the dispatcher publishes by row.Topic.
 		Violations: repo,
-		Embedder:   embedClient,
+		Embedders:  embedders,
 		// R22 (ADR-254 D7): the domain service takes the keyed debit claim
 		// (gcid, dispatch_idempotency_key, action_code) BEFORE any spend and
 		// reports a redelivery on InvokeResponse.Deduped — one claim

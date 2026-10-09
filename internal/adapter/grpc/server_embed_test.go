@@ -282,6 +282,35 @@ func TestEmbed_UpstreamStatusRelay(t *testing.T) {
 	}
 }
 
+// TestEmbed_RegistryRefusalsAreFailedPrecondition verifies the Release B
+// registry refusals map to the same status the Invoke path uses for a
+// configuration fault: the logical model is unknown to the registry, the
+// resolved entry cannot serve embeddings, or no embedding adapter is wired
+// for the resolved provider. Nothing was dispatched and nothing was billed.
+func TestEmbed_RegistryRefusalsAreFailedPrecondition(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"unknown logical model", &domain.ConfigError{Detail: `embed: model "nope" is not in the registry`}},
+		{"resolved entry cannot serve embeddings", &domain.CapabilityError{Model: "text-embedding-004", Capability: "embeddings"}},
+		{"empty credential reference", &domain.CredentialError{Model: "text-embedding-004", APIKeyEnv: "EMBEDDING_LLM_API_KEY"}},
+		{"no adapter for the resolved provider", &domain.NoProviderError{Family: domain.VendorFamilyOpenAI}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cleanup := newEmbedServer(t, &fakeEmbedder{err: tc.err})
+			defer cleanup()
+
+			_, err := client.Embed(context.Background(), validEmbedRequest())
+			require.Error(t, err)
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err),
+				"a registry refusal is a configuration fault, not a vendor failure")
+			assert.NotEmpty(t, status.Convert(err).Message(), "the caller needs the reason, not just the code")
+		})
+	}
+}
+
 // TestEmbed_LedgerFailureIsInternal verifies the embed ledger failure is
 // explicitly mapped: an un-ledgered embed must not succeed, and a store fault
 // is an internal error the caller cannot fix (not a retryable vendor refusal,

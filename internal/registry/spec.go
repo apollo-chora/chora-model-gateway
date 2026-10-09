@@ -148,7 +148,10 @@ type ModelSpec struct {
 	// UpstreamModel is the model name sent to the provider. Defaults to ID.
 	UpstreamModel string `yaml:"upstream_model"`
 
-	// BaseURL is the API root. Required for every registry entry.
+	// BaseURL is the API root. Optional: a row may omit it when the deployment
+	// supplies the endpoint through the role-based env config
+	// ({TEXT,IMAGE,EMBEDDING}_LLM_BASE_URL) — see resolveBaseURL. An empty
+	// BaseURL is a self-hosted entry with no role endpoint configured.
 	BaseURL string `yaml:"base_url"`
 
 	// Endpoint path overrides. Empty means the provider default

@@ -184,22 +184,28 @@ func specFromRow(row map[string]any) (ModelSpec, error) {
 		}
 	}
 
+	// Kind is derived from the capability list, so it is computed before the
+	// base URL: a row that omits base_url inherits the role endpoint for its
+	// own kind.
+	kind := KindFromCapabilities(caps)
+
 	provider := strings.ToLower(yamlString(row, "provider"))
 	if !isKnownProvider(provider) {
 		return ModelSpec{}, &ConfigError{Msg: fmt.Sprintf(
 			"provider %q is not one of: %s", provider, strings.Join(KnownProviders, ", "))}
 	}
 
-	baseURL := yamlString(row, "base_url")
-	if baseURL == "" {
-		return ModelSpec{}, &ConfigError{Msg: "base_url is required for a registry entry"}
-	}
+	baseURL := resolveBaseURL(kind, yamlString(row, "base_url"))
 	// SSRF/egress guard: the base URL must not point at a private/internal
 	// IP. The gateway is the only caller of the vendor endpoints; a registry
 	// entry that could reach an internal service would turn the gateway
-	// into an internal-network proxy.
-	if err := domain.ValidateEgressURL(baseURL); err != nil {
-		return ModelSpec{}, &ConfigError{Msg: fmt.Sprintf("base_url %q: %v", baseURL, err)}
+	// into an internal-network proxy. An empty base URL is allowed here (a
+	// self-hosted entry the deployment did not point at a role) — the
+	// dispatch-time check refuses it rather than guessing an endpoint.
+	if baseURL != "" {
+		if err := domain.ValidateEgressURL(baseURL); err != nil {
+			return ModelSpec{}, &ConfigError{Msg: fmt.Sprintf("base_url %q: %v", baseURL, err)}
+		}
 	}
 
 	paths := make(map[string]string, len(endpointPathFields))
@@ -217,8 +223,6 @@ func specFromRow(row map[string]any) (ModelSpec, error) {
 		}
 		paths[field] = path
 	}
-
-	kind := KindFromCapabilities(caps)
 
 	grounding, err := parseGrounding(row)
 	if err != nil {
@@ -295,6 +299,29 @@ func specFromRow(row map[string]any) (ModelSpec, error) {
 		ExtraHeaders:        extraHeaders,
 		Grounding:           grounding,
 	}, nil
+}
+
+// roleBaseURLEnv maps a registry Kind to the role-based env var that supplies
+// its API root. The deployment registry (chora-stack/config/model-gateway/
+// models.prod.yaml) declares no base_url on any row: the deployment supplies
+// the endpoint through the role configuration, exactly as it supplies the
+// credential through {PREFIX}_LLM_API_KEY. A row that omits base_url therefore
+// inherits the endpoint for its own kind.
+var roleBaseURLEnv = map[Kind]string{
+	KindText:      "TEXT_LLM_BASE_URL",
+	KindImage:     "IMAGE_LLM_BASE_URL",
+	KindEmbedding: "EMBEDDING_LLM_BASE_URL",
+}
+
+// resolveBaseURL returns the entry's declared base_url, or — when the row
+// omits it — the role-based env URL for the entry's kind. An empty result
+// means the entry is self-hosted and no role endpoint is configured for it;
+// the caller decides whether that is dispatchable.
+func resolveBaseURL(kind Kind, declared string) string {
+	if declared != "" {
+		return declared
+	}
+	return strings.TrimSpace(os.Getenv(roleBaseURLEnv[kind]))
 }
 
 // KindFromCapabilities derives the dispatch shape from a capability list:

@@ -36,6 +36,7 @@ type Service struct {
 	gatewayVersion string // build identifier, e.g. "chora-model-gateway:58b28eb"
 	now            func() time.Time
 	newID          func() string // UUIDv7 generator for invocation_id default
+	models         ModelResolver  // model-registry resolver (the Invoke flow's authoritative route source)
 
 	// GroundedSearch ports (ADR-231). OPTIONAL at construction so Invoke-only
 	// wiring + tests need not provide them; GroundedSearch fails loud at
@@ -45,10 +46,17 @@ type Service struct {
 	mana        ManaMeter
 	egressAudit EgressAuditWriter
 
-	// Embed port (G1'-1). OPTIONAL at construction, mirroring the grounded
+	// Embed ports (G1'-1). OPTIONAL at construction, mirroring the grounded
 	// ports; Embed fails loud at call-time when nil (never a silent
 	// fallback to direct Vertex).
-	embedder EmbeddingClient
+	//
+	// The registry-directed Embed flow resolves the logical model through
+	// s.models and dispatches through the client registered for the RESOLVED
+	// provider family, so the registry — not the logical id's name shape —
+	// decides the embedding route. Optional: with no Embedders wired the
+	// flow fails loud rather than dispatching through an unverified
+	// adapter.
+	embedders map[VendorFamily]EmbeddingClient
 
 	// budgetRequired enables the fail-closed "budget required" mode for the
 	// GroundedSearch + Embed flows (see ServiceConfig.BudgetRequired).
@@ -89,8 +97,9 @@ type ServiceConfig struct {
 	// the field comment on Service.violations.
 	Violations ViolationPublisher
 
-	// Embed port (G1'-1). OPTIONAL; nil means Service.Embed fails loud.
-	Embedder EmbeddingClient
+	// Embed ports (G1'-1). OPTIONAL; nil means Service.Embed fails loud
+	// rather than dispatching through an unverified adapter.
+	Embedders []EmbeddingClient
 
 	// EnforceContentsScreen promotes the G1'-3 contents leg from audit-only to
 	// blocking. Default false, which is the owner's closing rule of 2026-08-07:
@@ -216,6 +225,21 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		vendors[fam] = v
 	}
 
+	embedders := make(map[VendorFamily]EmbeddingClient, len(cfg.Embedders))
+	for _, e := range cfg.Embedders {
+		if e == nil {
+			return nil, errors.New("model gateway: nil EmbeddingClient in Embedders slice")
+		}
+		fam := e.Family()
+		if fam == "" {
+			return nil, errors.New("model gateway: EmbeddingClient.Family() returned empty")
+		}
+		if _, dup := embedders[fam]; dup {
+			return nil, fmt.Errorf("model gateway: duplicate EmbeddingClient for family %q", fam)
+		}
+		embedders[fam] = e
+	}
+
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -283,7 +307,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		grounded:       cfg.Grounded,
 		mana:           cfg.Mana,
 		egressAudit:    cfg.EgressAudit,
-		embedder:       cfg.Embedder,
+		embedders:      embedders,
+		models:         cfg.Models,
 
 		budgetRequired: cfg.BudgetRequired,
 

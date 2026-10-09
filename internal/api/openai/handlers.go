@@ -556,6 +556,18 @@ func mapEmbedError(err error) mappedError {
 			message: domain.SanitizeUpstreamError(*us, ""),
 		}
 	}
+	// Registry / policy refusals discovered BEFORE any provider call: the
+	// logical model is unknown to the registry, the resolved entry cannot
+	// serve embeddings, or no embedding adapter is wired for the resolved
+	// provider. A refusal, not an upstream fault — nothing was billed.
+	var cfgErr *domain.ConfigError
+	var capErr *domain.CapabilityError
+	var credErr *domain.CredentialError
+	var noProvider *domain.NoProviderError
+	if errors.As(err, &cfgErr) || errors.As(err, &capErr) ||
+		errors.As(err, &credErr) || errors.As(err, &noProvider) {
+		return mappedError{http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error()}
+	}
 	// For non-upstream errors, the gateway-controlled message is safe to
 	// relay. The full error (with the upstream body) is available in the
 	// logs for internal debugging.

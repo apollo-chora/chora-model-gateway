@@ -56,14 +56,14 @@ func TestVerifyEmbeddingRoutePin_DisabledIsANoOp(t *testing.T) {
 	spec := approvedPinSpec()
 	spec.UpstreamModel = "some-other-model"
 	reg := pinRegistry(t, spec)
-	if err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyVertexGemini}, embeddingPinConfig{}); err != nil {
+	if err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyVertexGemini}}, embeddingPinConfig{}); err != nil {
 		t.Fatalf("disabled pin must not fail: %v", err)
 	}
 }
 
 func TestVerifyEmbeddingRoutePin_ApprovedRoutePasses(t *testing.T) {
 	reg := pinRegistry(t, approvedPinSpec())
-	if err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyOpenAI}, enabledPin()); err != nil {
+	if err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyOpenAI}}, enabledPin()); err != nil {
 		t.Fatalf("approved route must pass: %v", err)
 	}
 }
@@ -72,7 +72,7 @@ func TestVerifyEmbeddingRoutePin_UpstreamMismatchFails(t *testing.T) {
 	spec := approvedPinSpec()
 	spec.UpstreamModel = "openai/text-embedding-3-large"
 	reg := pinRegistry(t, spec)
-	err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyOpenAI}, enabledPin())
+	err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyOpenAI}}, enabledPin())
 	if err == nil {
 		t.Fatal("a different upstream model must fail the boot")
 	}
@@ -82,7 +82,7 @@ func TestVerifyEmbeddingRoutePin_FallbackFails(t *testing.T) {
 	spec := approvedPinSpec()
 	spec.FallbackIDs = []string{"gpt-4o"}
 	reg := pinRegistry(t, spec)
-	err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyOpenAI}, enabledPin())
+	err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyOpenAI}}, enabledPin())
 	if err == nil {
 		t.Fatal("a declared fallback must fail the boot")
 	}
@@ -92,7 +92,7 @@ func TestVerifyEmbeddingRoutePin_ProviderHostMismatchFails(t *testing.T) {
 	spec := approvedPinSpec()
 	spec.BaseURL = "https://api.somewhere-else.example/v1"
 	reg := pinRegistry(t, spec)
-	err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyOpenAI}, enabledPin())
+	err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyOpenAI}}, enabledPin())
 	if err == nil {
 		t.Fatal("a different provider host must fail the boot")
 	}
@@ -102,7 +102,7 @@ func TestVerifyEmbeddingRoutePin_MissingLogicalIDFails(t *testing.T) {
 	reg := pinRegistry(t, approvedPinSpec())
 	cfg := enabledPin()
 	cfg.LogicalID = "not-in-the-registry"
-	err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyOpenAI}, cfg)
+	err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyOpenAI}}, cfg)
 	if err == nil {
 		t.Fatal("an unknown logical id must fail the boot")
 	}
@@ -114,7 +114,7 @@ func TestVerifyEmbeddingRoutePin_MissingLogicalIDFails(t *testing.T) {
 // registry's upstream_model.
 func TestVerifyEmbeddingRoutePin_AdapterMismatchFails(t *testing.T) {
 	reg := pinRegistry(t, approvedPinSpec())
-	err := verifyEmbeddingRoutePin(reg, fakePinEmbedder{family: domain.VendorFamilyVertexGemini}, enabledPin())
+	err := verifyEmbeddingRoutePin(reg, []domain.EmbeddingClient{fakePinEmbedder{family: domain.VendorFamilyVertexGemini}}, enabledPin())
 	if err == nil {
 		t.Fatal("an adapter that cannot honour the registry upstream must fail the boot")
 	}

@@ -56,7 +56,7 @@ func newBlockingEmbedVendor() *blockingEmbedVendor {
 	return &blockingEmbedVendor{entered: make(chan struct{}, 1), release: make(chan struct{})}
 }
 
-func (b *blockingEmbedVendor) Family() domain.VendorFamily { return domain.VendorFamilyVertexGemini }
+func (b *blockingEmbedVendor) Family() domain.VendorFamily { return domain.VendorFamilyOpenAI }
 
 func (b *blockingEmbedVendor) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (domain.EmbedVendorResponse, error) {
 	if atomic.AddInt32(&b.calls, 1) == 1 {
@@ -258,7 +258,7 @@ func newGroundedServiceWithLimit(t *testing.T, vendor domain.GroundedVendorClien
 // ----------------------------------------------------------------------------
 
 func TestEmbed_EmbeddingRoutePinRefusesOverride(t *testing.T) {
-	vendor := &fakeEmbedVendor{family: domain.VendorFamilyVertexGemini, response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"}}
+	vendor := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"}}
 	svc := newEmbedServiceWithConfig(t, false, nil, vendor, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
 		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{LogicalID: domain.DefaultEmbeddingModelID}
 	})
@@ -296,7 +296,7 @@ func TestBudgetRepoError_FailsClosedOnEveryPath(t *testing.T) {
 	assert.Equal(t, "budget repo unavailable", ierr.Detail)
 
 	// Embed (budget is read only in fail-closed "budget required" mode).
-	embedSvc := newEmbedServiceWithConfig(t, true, nil, &fakeEmbedVendor{}, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
+	embedSvc := newEmbedServiceWithConfig(t, true, nil, &fakeEmbedVendor{family: domain.VendorFamilyOpenAI}, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
 		cfg.Budget = &fakeBudget{getErr: repoErr}
 	})
 	_, err = embedSvc.Embed(context.Background(), validEmbedRequest())

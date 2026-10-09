@@ -16,6 +16,14 @@ type ModelInfo struct {
 	// Vendor is the vendor family this model dispatches to.
 	Vendor VendorFamily
 
+	// UpstreamModel is the model name sent to the provider. Empty means ID.
+	UpstreamModel string
+
+	// BaseURL is the resolved API root for this entry. Empty means the entry
+	// declares none and no role endpoint is configured for it — a route that
+	// cannot be dispatched to a verified endpoint.
+	BaseURL string
+
 	// Capabilities advertises what the model can do ("chat", "tools",
 	// "vision", "image", "embeddings", "web_search"). Empty means ["chat"].
 	Capabilities []string

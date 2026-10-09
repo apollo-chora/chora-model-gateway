@@ -212,6 +212,12 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 
 // EmbedText produces one text embedding via the OpenAI embeddings
 // endpoint. Implements domain.EmbeddingClient.
+//
+// The route is the RESOLVED registry route, not the adapter's construction
+// default: req.UpstreamModel is the registry upstream_model and req.BaseURL
+// the registry base_url. A logical id is an alias, so an OpenRouter entry is
+// served here against openrouter.ai — never against whatever endpoint the
+// adapter happens to have been built with.
 func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (domain.EmbedVendorResponse, error) {
 	if err := domain.CheckContextCancellation(ctx); err != nil {
 		return domain.EmbedVendorResponse{}, err
@@ -227,7 +233,7 @@ func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (
 		return domain.EmbedVendorResponse{}, fmt.Errorf("openai: marshal embeddings request: %w", err)
 	}
 
-	url := c.resolveEndpoint(c.embeddingsPath, "/embeddings")
+	url := c.resolveEndpointFor(req.BaseURL, c.embeddingsPath, "/embeddings")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
 	if err != nil {
 		return domain.EmbedVendorResponse{}, fmt.Errorf("openai: build embeddings request: %w", err)
@@ -251,7 +257,33 @@ func (c *Client) EmbedText(ctx context.Context, req domain.EmbedVendorRequest) (
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return domain.EmbedVendorResponse{}, fmt.Errorf("openai: unmarshal embeddings response: %w", err)
 	}
-	return parsed.toDomain(string(req.LogicalModelID)), nil
+	return parsed.toDomain(upstreamModel(req)), nil
+}
+
+// upstreamModel returns the model name to send upstream: the resolved
+// registry upstream_model when the dispatcher set one, else the logical id.
+func upstreamModel(req domain.EmbedVendorRequest) string {
+	if s := strings.TrimSpace(req.UpstreamModel); s != "" {
+		return s
+	}
+	return string(req.LogicalModelID)
+}
+
+// resolveEndpointFor builds the embeddings URL against the RESOLVED base URL
+// when the dispatcher supplied one, else against the adapter's configured
+// endpoint. An absolute http(s) path override is used verbatim either way.
+func (c *Client) resolveEndpointFor(baseURL, path, defaultPath string) string {
+	endpoint := c.endpoint
+	if baseURL != "" {
+		endpoint = baseURL
+	}
+	if path == "" {
+		path = defaultPath
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	return strings.TrimRight(endpoint, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 // ---------------------------------------------------------------------------
@@ -843,7 +875,7 @@ type embeddingsResponse struct {
 
 func buildEmbeddingsBody(req domain.EmbedVendorRequest) embeddingsBody {
 	body := embeddingsBody{
-		Model: string(req.LogicalModelID),
+		Model: upstreamModel(req),
 		Input: req.Text,
 	}
 	if req.OutputDimensions > 0 {
