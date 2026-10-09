@@ -12,7 +12,9 @@ import (
 // reusing the Invoke governance substance behind a citations-first surface.
 //
 // Order of operations (each a single port call — fail-closed, cheapest gates
-// first so a broke/blocked tenant never triggers an external API cost):
+// first so a broke/blocked tenant never triggers an external API cost). The
+// per-tenant concurrency ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT) is
+// checked before any of them and is an audited deny:
 //
 //  1. Validate + resolve invocation_id.
 //  2. ExternalEgressGate.Authorize — platform kill-switch + per-tenant
@@ -42,6 +44,22 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 	if err := validateGroundedRequest(req); err != nil {
 		return GroundedSearchResult{}, err
 	}
+
+	// Step 1b — per-tenant concurrency ceiling
+	// (CHORA_LLM_MAX_CONCURRENT_PER_TENANT). Taken before the external-egress
+	// gate so a refused search never reaches a provider and is never billed.
+	// The denial is audited like every other pre-egress refusal (the invariant
+	// is one egress audit event per call). nil limiter = unlimited/off.
+	release, ok := s.admission.Acquire(req.TenantID)
+	if !ok {
+		s.emitEgressAudit(ctx, req, EgressAuditDenied, EgressDenyOverloaded, ArmorVerdictUnspecified, ArmorVerdictUnspecified, "", "", nil, 0)
+		return GroundedSearchResult{}, &GroundedSearchError{
+			Reason: EgressDenyOverloaded,
+			Detail: overloadDetail(req.TenantID, s.admission.Limit()),
+			Inner:  &OverloadedError{TenantID: req.TenantID, Limit: s.admission.Limit()},
+		}
+	}
+	defer release()
 
 	invocationID := req.InvocationID
 	if invocationID == "" {

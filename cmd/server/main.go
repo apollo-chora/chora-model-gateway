@@ -85,6 +85,8 @@ func run() error {
 		"gateway_version", cfg.gatewayVersion,
 		"budget_required", cfg.budgetRequired,
 		"budget_required_tenants", cfg.budgetRequiredTenants,
+		"max_concurrent_per_tenant", cfg.maxConcurrentPerTenant,
+		"embedding_pin_enabled", cfg.embeddingPin.Enabled,
 	)
 
 	// ---------------------------------------------------------------------
@@ -235,6 +237,22 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("model registry: %w", err)
 	}
+	// Demo-deployment embedding-route pin: assert the EFFECTIVE loaded registry
+	// still maps the pinned logical id to the approved upstream model, with no
+	// fallbacks, and that the wired embedding adapter honours that entry. This
+	// is the file the running gateway actually loaded (CHORA_MODEL_REGISTRY),
+	// not a repo copy. Disabled by default; when enabled a mismatch fails boot.
+	if err := verifyEmbeddingRoutePin(modelRegistry, embedClient, cfg.embeddingPin); err != nil {
+		return fmt.Errorf("embedding route pin: %w", err)
+	}
+	if cfg.embeddingPin.Enabled {
+		slog.Info("embedding route pin verified",
+			"logical_id", cfg.embeddingPin.LogicalID,
+			"upstream_model", cfg.embeddingPin.UpstreamModel,
+			"adapter_family", string(embedClient.Family()),
+			"registry", envOr("CHORA_MODEL_REGISTRY", "config/models.yaml"),
+		)
+	}
 	modelResolver, err := registryadapter.NewResolver(modelRegistry)
 	if err != nil {
 		return fmt.Errorf("model registry adapter: %w", err)
@@ -319,8 +337,18 @@ func run() error {
 		// Tenant-scoped fail-closed override
 		// (CHORA_LLM_BUDGET_REQUIRED_TENANTS).
 		BudgetRequiredTenants: cfg.budgetRequiredTenants,
-		Now:                  time.Now,
-		NewID:                newInvocationID,
+		// Per-tenant concurrency ceiling
+		// (CHORA_LLM_MAX_CONCURRENT_PER_TENANT), enforced on Invoke, Embed and
+		// GroundedSearch before any billable dispatch. 0 = unlimited/off.
+		// PROCESS-LOCAL: see domain.TenantConcurrencyLimiter for the
+		// single-instance assumption.
+		MaxConcurrentPerTenant: cfg.maxConcurrentPerTenant,
+		// Demo embedding-route pin (CHORA_EMBEDDING_PIN_*): refuse an Embed
+		// request whose model is not the pinned logical id, so a runtime
+		// override cannot redirect the demo route. nil when disabled.
+		EmbeddingPin: cfg.embeddingPin.domainPin(),
+		Now:          time.Now,
+		NewID:        newInvocationID,
 		// The model-registry resolver backs the capability / output-ceiling /
 		// credential checks + the budget-downgrade re-resolution.
 		Models: modelResolver,
@@ -510,6 +538,8 @@ type runtimeConfig struct {
 	fallbackRetryBackoff     time.Duration // CHORA_FALLBACK_RETRY_BACKOFF_MS — delay before each same-provider retry
 	budgetRequired            bool          // CHORA_LLM_BUDGET_REQUIRED — fail-closed: a missing active budget window BLOCKS provider calls instead of allowing them (default false)
 	budgetRequiredTenants     domain.BudgetRequiredTenants // CHORA_LLM_BUDGET_REQUIRED_TENANTS — tenant-scoped fail-closed override; listed tenants fail closed even when the global flag is off (default empty)
+	maxConcurrentPerTenant   int                          // CHORA_LLM_MAX_CONCURRENT_PER_TENANT — per-tenant in-flight billable-invocation cap enforced on Invoke/Embed/GroundedSearch; 0 = unlimited (default)
+	embeddingPin             embeddingPinConfig           // CHORA_EMBEDDING_PIN_* — demo-only embedding-route pin/verification (default disabled)
 	vendorHTTPTimeout        time.Duration
 	defaultTenantID          string // CHORA_DEFAULT_TENANT_ID — HTTP facade default tenant
 	defaultGCID              string // CHORA_DEFAULT_GCID — HTTP facade default GCID
@@ -537,6 +567,20 @@ func loadConfig() (runtimeConfig, error) {
 		defaultTenantID:          os.Getenv("CHORA_DEFAULT_TENANT_ID"),
 		defaultGCID:              os.Getenv("CHORA_DEFAULT_GCID"),
 	}
+	// Per-tenant concurrency ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT).
+	// 0 = unlimited/off, preserving the historical behaviour. A negative value
+	// is an operator typo and fails the boot rather than silently disabling a
+	// ceiling that was meant to be set.
+	cfg.maxConcurrentPerTenant = envInt("CHORA_LLM_MAX_CONCURRENT_PER_TENANT", 0)
+	if cfg.maxConcurrentPerTenant < 0 {
+		return cfg, fmt.Errorf("CHORA_LLM_MAX_CONCURRENT_PER_TENANT must be >= 0 (0 = unlimited)")
+	}
+	// Demo-only embedding-route pin (CHORA_EMBEDDING_PIN_*). Default disabled.
+	embeddingPin, err := loadEmbeddingPinConfig()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.embeddingPin = embeddingPin
 	// Tenant-scoped fail-closed override (CHORA_LLM_BUDGET_REQUIRED_TENANTS):
 	// strict — a malformed or empty entry fails the boot rather than silently
 	// un-gating a tenant (mirrors the CHORA_DEMO_MANA_ALLOWED_GCIDS contract

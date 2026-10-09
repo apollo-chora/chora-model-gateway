@@ -155,6 +155,12 @@ func (s *Server) Embed(ctx context.Context, in *mgv1.EmbedRequest) (*mgv1.EmbedR
 // stack traces, or other sensitive information. Gateway-controlled error
 // messages (validation refusals, ledger failures) are safe to relay.
 func mapEmbedError(err error) error {
+	// Per-tenant concurrency ceiling: nothing was dispatched and nothing was
+	// billed, so the refusal is RESOURCE_EXHAUSTED (retryable).
+	var overloaded *domain.OverloadedError
+	if errors.As(err, &overloaded) {
+		return status.Errorf(codes.ResourceExhausted, "%s", overloaded.Error())
+	}
 	// Upstream HTTP status relay (mirrors the invoke path): a non-2xx
 	// provider response is relayed rather than flattened. The message is
 	// sanitized: the upstream error body is NOT included.
@@ -362,6 +368,13 @@ func (s *Server) Invoke(ctx context.Context, in *mgv1.InvokeRequest) (*mgv1.Invo
 // but the current service layer chose in-band to give callers the latency +
 // ledger correlation). The adapter respects that choice.
 func mapInvokeError(err error) error {
+	// Per-tenant concurrency ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT): the
+	// request never reached a provider and nothing was billed, so it is
+	// RESOURCE_EXHAUSTED (retryable), not a vendor failure.
+	var overloaded *domain.OverloadedError
+	if errors.As(err, &overloaded) {
+		return status.Errorf(codes.ResourceExhausted, "%s", overloaded.Error())
+	}
 	// ADR-254 D7 / ADR-252 D5: a typed precondition refusal. The message LEADS
 	// with the machine token (PreconditionError.Reason), so callers prefix-
 	// match companion_suspended / surface_unstamped off the status.
@@ -590,6 +603,12 @@ func (s *Server) GroundedSearch(ctx context.Context, in *mgv1.GroundedSearchRequ
 // upstream error body. The gateway-controlled Detail field is used instead,
 // led by the reason token so callers can prefix-match the denial reason.
 func mapGroundedError(err error) error {
+	// Per-tenant concurrency ceiling: no egress happened, so it is
+	// RESOURCE_EXHAUSTED (retryable), not a governance denial.
+	var overloaded *domain.OverloadedError
+	if errors.As(err, &overloaded) {
+		return status.Errorf(codes.ResourceExhausted, "%s", overloaded.Error())
+	}
 	var gerr *domain.GroundedSearchError
 	if !errors.As(err, &gerr) {
 		return status.Error(codes.Internal, "grounded search failed")

@@ -58,6 +58,15 @@ type Service struct {
 	// (CHORA_LLM_BUDGET_REQUIRED_TENANTS): listed tenants fail closed even
 	// when the global flag is off. See BudgetRequiredTenants.
 	budgetRequiredTenants BudgetRequiredTenants
+
+	// admission caps the number of in-flight billable invocations per tenant
+	// (CHORA_LLM_MAX_CONCURRENT_PER_TENANT). nil = unlimited/off. See
+	// TenantConcurrencyLimiter for the single-instance assumption.
+	admission *TenantConcurrencyLimiter
+
+	// embeddingPin, when non-nil, refuses an Embed request whose model is not
+	// the pinned logical id (CHORA_EMBEDDING_PIN_*). nil = unpinned.
+	embeddingPin *EmbeddingRoutePin
 }
 
 // ServiceConfig groups the ports + cross-cutting deps the gateway needs.
@@ -120,6 +129,22 @@ type ServiceConfig struct {
 	// in the list keep the historical fail-open behaviour until their budgets
 	// have been provisioned.
 	BudgetRequiredTenants BudgetRequiredTenants
+
+	// MaxConcurrentPerTenant caps the number of in-flight billable invocations
+	// per tenant across ALL THREE dispatch paths (Invoke, Embed,
+	// GroundedSearch). 0 (the default) means unlimited — the historical
+	// behaviour. Sourced from CHORA_LLM_MAX_CONCURRENT_PER_TENANT.
+	//
+	// SINGLE-INSTANCE ASSUMPTION: the cap is process-local. It is a true
+	// ceiling only when every billable request for the capped tenant reaches
+	// exactly one gateway process; see TenantConcurrencyLimiter.
+	MaxConcurrentPerTenant int
+
+	// EmbeddingPin, when non-nil, pins the Embed flow to one logical model id
+	// (CHORA_EMBEDDING_PIN_*): a caller-supplied model that is not the pinned
+	// id is refused rather than dispatched, so a runtime override cannot
+	// redirect the demo's embedding route. nil = unpinned.
+	EmbeddingPin *EmbeddingRoutePin
 
 	// Optional overrides for deterministic tests. Production wiring leaves
 	// these nil and the constructor substitutes time.Now + UUIDv7.
@@ -263,6 +288,9 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		budgetRequired: cfg.BudgetRequired,
 
 		budgetRequiredTenants: cfg.BudgetRequiredTenants,
+
+		admission:    NewTenantConcurrencyLimiter(cfg.MaxConcurrentPerTenant),
+		embeddingPin: cfg.EmbeddingPin,
 	}, nil
 }
 
@@ -375,7 +403,19 @@ func (fr FinishReason) String() string {
 //
 // Invoke is retained as the wire-level entry point the adapters' Invoker
 // interface calls; it adds no logic of its own.
+//
+// The per-tenant concurrency ceiling is taken HERE, on the single path every
+// Invoke rides (gRPC and HTTP both reach the domain service through the
+// governance decorators), so the slot is held across the provider dispatch and
+// released on every exit path. The check runs BEFORE any billable dispatch: a
+// refused request never reaches a vendor and is never billed.
 func (s *Service) Invoke(ctx context.Context, req InvokeRequest) (InvokeResponse, error) {
+	release, ok := s.admission.Acquire(req.TenantID)
+	if !ok {
+		return InvokeResponse{}, &OverloadedError{TenantID: req.TenantID, Limit: s.admission.Limit()}
+	}
+	defer release()
+
 	resp, err := s.executor.Execute(ctx, req)
 	if err != nil {
 		return InvokeResponse{}, err

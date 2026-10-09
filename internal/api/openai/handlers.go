@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -541,6 +542,12 @@ func embeddingInputs(raw json.RawMessage) ([]string, error) {
 // stack traces, or other sensitive information. Gateway-controlled error
 // messages (validation refusals, ledger failures) are safe to relay.
 func mapEmbedError(err error) mappedError {
+	// Per-tenant concurrency ceiling: nothing was dispatched and nothing was
+	// billed, so the OpenAI envelope is a 429 rate_limit_error (retryable).
+	var overloaded *domain.OverloadedError
+	if errors.As(err, &overloaded) {
+		return mappedError{http.StatusTooManyRequests, "rate_limit_error", "tenant_concurrency_limit", overloaded.Error()}
+	}
 	if us := domain.UpstreamStatusOf(err); us != nil {
 		return mappedError{
 			status:  *us,

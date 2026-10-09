@@ -28,6 +28,21 @@ var embeddingModelAllowlist = map[LogicalModelID]bool{
 	"text-multilingual-embedding-002": true,
 }
 
+// EmbeddingRoutePin pins the Embed flow to ONE logical model id for a
+// demo-specific deployment. When wired, a caller-supplied model that is not
+// the pinned id is refused rather than dispatched, so a runtime override
+// cannot redirect the demo's embedding route to another (potentially paid)
+// model. nil means unpinned — the historical behaviour.
+//
+// The pin is deliberately an exact-id assertion, not a name-shape rule: the
+// same guard that proves the demo route also proves nothing about billing for
+// any other model, and a name is not an authoritative billing policy. The
+// matching upstream_model assertion lives in the startup registry check
+// (cmd/server/embedding_pin.go).
+type EmbeddingRoutePin struct {
+	LogicalID LogicalModelID
+}
+
 // EmbedFlowRequest is the domain-side input for one text embedding.
 type EmbedFlowRequest struct {
 	InvocationID     string

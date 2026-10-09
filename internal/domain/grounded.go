@@ -189,6 +189,10 @@ const (
 	EgressDenyArmorPost   = "model_armor_post_block"
 	EgressDenyVendorError = "vendor_unavailable"
 	EgressDenyZeroCite    = "zero_citations"
+	// EgressDenyOverloaded — the tenant is at its per-tenant concurrency
+	// ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT). Nothing was dispatched and
+	// nothing was billed; the caller retries later.
+	EgressDenyOverloaded = "tenant_concurrency_limit"
 )
 
 // EgressAuditResult mirrors chora.governance.v1.AuditResult — the outcome of a

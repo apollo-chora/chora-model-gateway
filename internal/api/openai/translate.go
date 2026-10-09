@@ -234,6 +234,13 @@ type mappedError struct {
 // Detail field is used instead; the full error (with the upstream body) is
 // available in the logs for internal debugging.
 func mapInvokeError(err error) mappedError {
+	// Per-tenant concurrency ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT): the
+	// request never reached a provider and nothing was billed, so the OpenAI
+	// envelope is a 429 rate_limit_error (retryable), not a 502 vendor error.
+	var overloaded *domain.OverloadedError
+	if errors.As(err, &overloaded) {
+		return mappedError{http.StatusTooManyRequests, "rate_limit_error", "tenant_concurrency_limit", overloaded.Error()}
+	}
 	// PreconditionError — the companion-suspension decorator's typed refusal.
 	var perr *domain.PreconditionError
 	if errors.As(err, &perr) {

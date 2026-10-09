@@ -9,7 +9,9 @@ import (
 )
 
 // Embed executes the chokepoint embedding flow (G1'-1, owner-ruled
-// 2026-08-07). Order of operations:
+// 2026-08-07). The per-tenant concurrency ceiling
+// (CHORA_LLM_MAX_CONCURRENT_PER_TENANT) is checked before the vendor call and
+// is never billed. Order of operations:
 //
 //  1. Validate required identity + text; refuse loud on any gap.
 //  2. Resolve invocation_id (caller-supplied or generated).
@@ -44,6 +46,15 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 		return EmbedFlowResponse{}, errors.New("embed: text required")
 	}
 
+	// Per-tenant concurrency ceiling (CHORA_LLM_MAX_CONCURRENT_PER_TENANT),
+	// taken before the vendor dispatch so a refused embed is never billed.
+	// nil limiter = unlimited/off.
+	release, ok := s.admission.Acquire(req.TenantID)
+	if !ok {
+		return EmbedFlowResponse{}, &OverloadedError{TenantID: req.TenantID, Limit: s.admission.Limit()}
+	}
+	defer release()
+
 	// Fail-closed "budget required" mode: a tenant with NO active budget
 	// window is refused BEFORE the vendor call — the absence of a policy must
 	// not restore unlimited provider spending. The mode is global
@@ -69,6 +80,13 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 	model := req.LogicalModelID
 	if model == "" {
 		model = DefaultEmbeddingModelID
+	}
+	// Demo-deployment route pin (CHORA_EMBEDDING_PIN_*): when wired, the ONLY
+	// accepted model is the pinned logical id. A runtime override that would
+	// redirect the demo's embedding route (including to another allowlisted
+	// embedding model) is refused BEFORE dispatch, never silently re-routed.
+	if s.embeddingPin != nil && model != s.embeddingPin.LogicalID {
+		return EmbedFlowResponse{}, fmt.Errorf("embed: model %q is refused; the embedding route is pinned to %q (CHORA_EMBEDDING_PIN_LOGICAL_ID)", model, s.embeddingPin.LogicalID)
 	}
 	if !embeddingModelAllowlist[model] {
 		return EmbedFlowResponse{}, fmt.Errorf("embed: model %q is not an embedding model; refusing (never silently re-routed)", model)
