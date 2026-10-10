@@ -322,11 +322,9 @@ func specFromRow(row map[string]any) (ModelSpec, error) {
 }
 
 // roleBaseURLEnv maps a registry Kind to the role-based env var that supplies
-// its API root. The deployment registry (chora-stack/config/model-gateway/
-// models.prod.yaml) declares no base_url on any row: the deployment supplies
-// the endpoint through the role configuration, exactly as it supplies the
-// credential through {PREFIX}_LLM_API_KEY. A row that omits base_url therefore
-// inherits the endpoint for its own kind.
+// its API root. Rows that declare base_url use it verbatim; a row that omits
+// base_url inherits the endpoint for its own kind from the role configuration,
+// exactly as the credential comes from {PREFIX}_LLM_API_KEY.
 var roleBaseURLEnv = map[Kind]string{
 	KindText:      "TEXT_LLM_BASE_URL",
 	KindImage:     "IMAGE_LLM_BASE_URL",
