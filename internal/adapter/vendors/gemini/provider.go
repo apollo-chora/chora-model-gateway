@@ -88,27 +88,6 @@ func (p *Provider) GenerateImage(ctx context.Context, req domain.ImageRequest) (
 	}, nil
 }
 
-// GroundedGenerate implements domain.GroundedGenerator.
-func (p *Provider) GroundedGenerate(ctx context.Context, req domain.GroundedGenerateRequest) (*domain.GroundedGenerateResponse, error) {
-	vendorResp, err := p.client.GroundedGenerate(ctx, domain.GroundedVendorRequest{
-		LogicalModelID: domain.LogicalModelID(req.Model),
-		Directive:       req.Prompt,
-		SystemPrompt:    req.SystemPrompt,
-		MaxResults:      req.MaxResults,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &domain.GroundedGenerateResponse{
-		Text:          vendorResp.Answer,
-		Citations:     vendorResp.Citations,
-		SearchQueries: vendorResp.WebSearchQueries,
-		Usage:         toCanonicalUsage(vendorResp.Usage),
-		ModelVersion:  vendorResp.ModelVersion,
-		FinishReason:  vendorResp.FinishReason,
-	}, nil
-}
-
 // toCanonicalUsage maps the governance-layer TokenUsage to the canonical
 // TokenUsage struct. The governance layer tracks input / output / cached /
 // cost; the canonical struct adds the extended fields (reasoning, image units,

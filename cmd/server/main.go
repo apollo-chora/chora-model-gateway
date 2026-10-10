@@ -49,6 +49,7 @@ import (
 	registryadapter "github.com/apollo-chora/chora-model-gateway/internal/adapter/registry"
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/secrets"
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/anthropic"
+	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/exa"
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/gemini"
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/openai"
 	"github.com/apollo-chora/chora-model-gateway/internal/adapter/vendors/vertexembed"
@@ -166,6 +167,15 @@ func run() error {
 	anthropicClient, err := anthropic.New(anthropic.Config{Secrets: secretClient})
 	if err != nil {
 		return fmt.Errorf("anthropic adapter: %w", err)
+	}
+	exaClient, err := exa.New(exa.Config{
+		HTTPClient:   &http.Client{Timeout: cfg.vendorHTTPTimeout},
+		APIKey:       os.Getenv("EXA_API_KEY"),
+		ChatEndpoint: os.Getenv("TEXT_LLM_BASE_URL"),
+		ChatAPIKey:   os.Getenv("TEXT_LLM_API_KEY"),
+	})
+	if err != nil {
+		return fmt.Errorf("exa adapter: %w", err)
 	}
 
 	// G1'-1 (2026-08-07): the embeddings chokepoint re-route. Same project,
@@ -300,9 +310,10 @@ func run() error {
 	// ---------------------------------------------------------------------
 	// Domain service composition. The single *pg.Repo backs Budget + Outbox
 	// (Invoke) AND ExternalEgressGate + EgressAuditWriter (GroundedSearch,
-	// ADR-231); geminiClient backs BOTH the Vendor list AND the grounded vendor
-	// port (google_search grounding); DomainManaMeter is the grounded chain's
-	// mana port.
+	// ADR-231); exaClient backs the grounded vendor port (Exa retrieval +
+	// LongCat synthesis, ADR-231 Exa cutover 2026-10-10 — previously geminiClient
+	// with Vertex "Grounding with Google Search"); DomainManaMeter is the
+	// grounded chain's mana port.
 	// ---------------------------------------------------------------------
 	svc, err := domain.NewService(domain.ServiceConfig{
 		Vendors:        []domain.VendorClient{geminiClient, openaiClient, anthropicClient},
@@ -312,7 +323,7 @@ func run() error {
 		Policies:       policies,
 		GatewayVersion: cfg.gatewayVersion,
 		EgressGate:     repo,
-		Grounded:       geminiClient,
+		Grounded:       exaClient,
 		Mana:           clients.NewDomainManaMeter(manaClient),
 		EgressAudit:    repo,
 		// ADR-152 amendment 2026-08-07 (G2): the gateway is the producer of
