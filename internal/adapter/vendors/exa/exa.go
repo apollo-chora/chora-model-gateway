@@ -331,7 +331,7 @@ func (c *Client) synthesize(ctx context.Context, req domain.GroundedVendorReques
 	var lastErr error
 	var lastResp *http.Response
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatEndpoint+"/chat/completions", bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatEndpoint+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return "", domain.TokenUsage{}, fmt.Errorf("exa grounded: build chat request: %w", err)
 		}
