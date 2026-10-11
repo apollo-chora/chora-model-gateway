@@ -40,11 +40,12 @@ func (f *fakeEgressGate) RecordEgress(ctx context.Context, tenantID string) erro
 }
 
 type fakeGroundedVendor struct {
-	family  domain.VendorFamily
-	resp    domain.GroundedVendorResponse
-	err     error
-	calls   int
-	lastReq domain.GroundedVendorRequest
+	family    domain.VendorFamily
+	resp      domain.GroundedVendorResponse
+	err       error
+	respOnErr bool // return resp EVEN on error (partial-spend accounting)
+	calls     int
+	lastReq   domain.GroundedVendorRequest
 }
 
 func (f *fakeGroundedVendor) Family() domain.VendorFamily { return f.family }
@@ -53,6 +54,9 @@ func (f *fakeGroundedVendor) GroundedGenerate(ctx context.Context, req domain.Gr
 	f.calls++
 	f.lastReq = req
 	if f.err != nil {
+		if f.respOnErr {
+			return f.resp, f.err
+		}
 		return domain.GroundedVendorResponse{}, f.err
 	}
 	return f.resp, nil
@@ -505,6 +509,49 @@ func TestGroundedSearch_VendorError_Surfaces(t *testing.T) {
 	require.ErrorAs(t, err, &gerr)
 	assert.Equal(t, domain.EgressDenyVendorError, gerr.Reason)
 	assert.Equal(t, 0, f.mana.debitCalls, "no charge when the vendor failed")
+	require.Len(t, f.audit.events, 1)
+	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
+}
+
+// A vendor error AFTER billable work (e.g. Exa search succeeded, LongCat
+// synthesis failed) must still account the partial spend: budget debit +
+// ledger row, not just the audit event.
+func TestGroundedSearch_VendorError_PartialSpendIsAccounted(t *testing.T) {
+	svc, f := newGroundedTestService(t, func(f *groundedFakes) {
+		f.grounded.err = errors.New("synthesis 500")
+		f.grounded.respOnErr = true
+		f.grounded.resp.Usage = domain.TokenUsage{
+			CostMicros:   10_000,
+			GroundingUnits: 1,
+		}
+	})
+	_, err := svc.GroundedSearch(context.Background(), groundedReq())
+	var gerr *domain.GroundedSearchError
+	require.ErrorAs(t, err, &gerr)
+	assert.Equal(t, domain.EgressDenyVendorError, gerr.Reason)
+
+	assert.Equal(t, int64(10_000), f.budget.debits, "partial provider spend is debited")
+	assert.Equal(t, 1, f.budget.debitCalls)
+	require.Len(t, f.outbox.events, 1, "ledger row for the billed search")
+	assert.Equal(t, int64(10_000), f.outbox.events[0].CostMicros)
+	require.Len(t, f.audit.events, 1)
+	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
+}
+
+// An Armor POST sanitizer ERROR (as opposed to a terminal block) still follows
+// the vendor-billed accounting path: budget debit + ledger + egress counter.
+func TestGroundedSearch_ArmorPostSanitizerError_AccountsVendorSpend(t *testing.T) {
+	svc, f := newGroundedTestService(t, func(f *groundedFakes) {
+		f.armor.postErr = errors.New("armor backend down")
+	})
+	_, err := svc.GroundedSearch(context.Background(), groundedReq())
+	var gerr *domain.GroundedSearchError
+	require.ErrorAs(t, err, &gerr)
+	assert.Equal(t, domain.EgressDenyArmorPost, gerr.Reason)
+
+	assert.Equal(t, 1, f.budget.debitCalls, "the vendor billed ⇒ budget debited")
+	require.Len(t, f.outbox.events, 1, "ledger row for the billed egress")
+	assert.Equal(t, 1, f.egress.recordCalls, "the web call happened ⇒ counter incremented")
 	require.Len(t, f.audit.events, 1)
 	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
 }

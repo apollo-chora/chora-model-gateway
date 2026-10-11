@@ -26,10 +26,9 @@ func deploymentRegistryPath(t *testing.T) string {
 	return candidate
 }
 
-// The deployment registry declares no base_url on any row — the deployment
-// supplies every endpoint through the role-based env config. Before the
-// base_url inheritance landed, the loader rejected the whole file with
-// "base_url is required" and the Go gateway could not boot on it.
+// The deployment registry declares its endpoints on the rows themselves; the
+// role-based env URLs are the fallback for rows that declare none (e.g. the
+// self-hosted and stub entries). The loader rejects a row with neither.
 func TestLoadDeploymentRegistry(t *testing.T) {
 	clearEnvRoleVars(t)
 	t.Setenv("TEXT_LLM_BASE_URL", "https://api.meta.ai/v1")
@@ -50,10 +49,14 @@ func TestLoadDeploymentRegistry(t *testing.T) {
 	assert.True(t, embed.Supports("embeddings"))
 	assert.Empty(t, embed.FallbackIDs, "the pinned route must have no fallbacks")
 
-	// A text row inherits the TEXT role endpoint.
-	text, ok := reg.Get("gpt-4o")
+	// The deployment's text route: every non-grounded text caller resolves to
+	// LongCat-2.5-Preview. The row declares its endpoint explicitly; the
+	// role-based env URL remains the fallback for rows that declare none.
+	text, ok := reg.Get("longcat-2.5-preview")
 	require.True(t, ok)
-	assert.Equal(t, "https://api.meta.ai/v1", text.BaseURL)
+	assert.Equal(t, "LongCat-2.5-Preview", text.UpstreamModel)
+	assert.Equal(t, "https://api.longcat.ai/openai/v1", text.BaseURL)
+	assert.True(t, text.Supports("chat"))
 }
 
 // hostOf extracts the host of an absolute http(s) URL, lowercased. Returns ""

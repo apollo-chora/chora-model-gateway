@@ -148,6 +148,7 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 	}
 
 	// Step 7 — grounded web dispatch (the single controlled egress).
+	vendorName := string(s.grounded.Family())
 	vendorResp, err := s.grounded.GroundedGenerate(ctx, GroundedVendorRequest{
 		LogicalModelID: s.groundedModel(req),
 		Directive:      directive,
@@ -157,10 +158,17 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 		TenantID:       req.TenantID,
 	})
 	if err != nil {
-		s.emitEgressAudit(ctx, req, EgressAuditDenied, EgressDenyVendorError, armorPre, ArmorVerdictUnspecified, "", "", nil, 0)
+		// Partial-spend accounting: a vendor error AFTER billable work (e.g.
+		// the Exa search succeeded, the LongCat synthesis failed) must still
+		// debit the budget + write the ledger row — the provider billed even
+		// though the call did not complete.
+		if vendorResp.Usage.CostMicros > 0 {
+			s.debitBudget(ctx, budget, req.TenantID, vendorResp.Usage.CostMicros)
+			s.emitGroundedOutbox(ctx, invocationID, req, vendorName, vendorResp, armorPre, ArmorVerdictUnspecified)
+		}
+		s.emitEgressAudit(ctx, req, EgressAuditDenied, EgressDenyVendorError, armorPre, ArmorVerdictUnspecified, vendorName, vendorResp.ModelVersion, vendorResp.WebSearchQueries, 0)
 		return GroundedSearchResult{}, &GroundedSearchError{Reason: EgressDenyVendorError, Detail: "grounded vendor dispatch failed", Inner: err}
 	}
-	vendorName := string(s.grounded.Family())
 
 	// Step 8 — Armor POST on the WEB-SOURCED answer (prompt-injection-via-page
 	// defence). A block still emits the ledger (the vendor billed) + records the
@@ -170,6 +178,12 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 		var perr error
 		armorPost, _, perr = s.armor.SanitizeModelResponse(ctx, policy.ArmorTemplate, vendorResp.Answer)
 		if perr != nil {
+			// Mirror the terminal-block accounting: the web call happened and
+			// the vendor billed, so budget + ledger + egress counter are due
+			// even though the sanitizer call itself failed.
+			s.debitBudget(ctx, budget, req.TenantID, vendorResp.Usage.CostMicros)
+			_ = s.egressGate.RecordEgress(ctx, req.TenantID)
+			s.emitGroundedOutbox(ctx, invocationID, req, vendorName, vendorResp, armorPre, ArmorVerdictUnspecified)
 			s.emitEgressAudit(ctx, req, EgressAuditDenied, EgressDenyArmorPost, armorPre, ArmorVerdictUnspecified, vendorName, vendorResp.ModelVersion, vendorResp.WebSearchQueries, 0)
 			return GroundedSearchResult{}, &GroundedSearchError{Reason: EgressDenyArmorPost, Detail: "model armor POST call failed", Inner: perr}
 		}

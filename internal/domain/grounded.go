@@ -133,8 +133,12 @@ const (
 	DefaultMaxResults int32 = 5
 	// MaxCitationsHardCap is the ceiling the gateway enforces on MaxResults.
 	MaxCitationsHardCap int32 = 10
-	// DefaultGroundedModel is the default grounding-capable model (ADR-231 D6).
-	DefaultGroundedModel LogicalModelID = "gemini-2.5-flash"
+	// DefaultGroundedModel is the default grounded-answer model (ADR-231 D6).
+	// The grounded chain no longer rides a grounding-capable model's own web
+	// tool: the exa vendor does Exa retrieval + this model synthesises the
+	// grounded answer. Grounding is web-search capability, not a model
+	// feature, so a budget downgrade is NOT applied here.
+	DefaultGroundedModel LogicalModelID = "longcat-2.5-preview"
 )
 
 // GroundedVendorRequest is the contract between Service.GroundedSearch and the

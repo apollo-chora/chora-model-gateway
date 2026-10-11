@@ -16,6 +16,7 @@ const (
 	VendorFamilyVertexGemma  VendorFamily = "vertex_ai_gemma"
 	VendorFamilyOpenAI       VendorFamily = "openai_byoa"
 	VendorFamilyAnthropic    VendorFamily = "anthropic_byoa"
+	VendorFamilyExa          VendorFamily = "exa"
 )
 
 // LogicalModelID is the caller-supplied identifier the gateway resolves
