@@ -715,9 +715,24 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 	// hardcoded value). Resolve it so a non-Gemini registry route (e.g. the
 	// OpenAI-compatible longcat-2.5-preview) dispatches to the matching
 	// provider instead of the Gemini one.
+	//
+	// The agent-declared fallback chain carries the SAME stale default: the
+	// policy loader stamps every entry with policy.Vendor before this point,
+	// so a chain built for a Gemini-era deployment keeps Vertex. Re-resolve
+	// each entry too — otherwise a primary failure walks into a provider the
+	// deployment may hold no credentials for, and the run dies on a target
+	// that could never have served the request (observed live: a 30s LongCat
+	// abort followed by an instant Vertex refusal, reported as
+	// `all 2 provider attempts failed; last provider "vertex_ai_gemini"`).
 	if e.fallback != nil && e.fallback.models != nil {
 		if info, merr := e.fallback.models.Resolve(ctx, policy.ResolvedLogicalModelID); merr == nil && info.Vendor != "" {
 			policy.Vendor = info.Vendor
+		}
+		for i := range policy.FallbackChain {
+			info, merr := e.fallback.models.Resolve(ctx, policy.FallbackChain[i].ResolvedLogicalModelID)
+			if merr == nil && info.Vendor != "" {
+				policy.FallbackChain[i].Vendor = info.Vendor
+			}
 		}
 	}
 

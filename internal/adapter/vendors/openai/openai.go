@@ -105,15 +105,27 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
+// providerRequestTimeout bounds one provider request end to end. A
+// non-streamed completion (the wire shape this adapter sends) returns NO
+// response headers until the model has finished generating, so the
+// response-header timeout must cover the WHOLE generation, not just the
+// provider's time-to-first-byte. A shorter header timeout aborts a long
+// generation while the provider is still working — observed live as
+// `net/http: timeout awaiting response headers` at exactly 30s on a
+// LongCat-2.5-Preview reasoning run, which surfaced upstream as
+// "all N provider attempts failed".
+const providerRequestTimeout = 300 * time.Second
+
 // newPooledClient returns an *http.Client with connection pooling and a
 // layered timeout hierarchy:
 //
 //   - Connection timeout (10s): bounds TCP dial + TLS handshake. A provider
 //     that accepts the TCP connection but never completes the handshake is
 //     cut off here.
-//   - Response-header timeout (30s): bounds the wait for the first response
-//     byte after the request is sent. A provider that accepts the request
-//     but never responds is cut off here.
+//   - Response-header timeout (= the overall budget): bounds the wait for the
+//     first response byte after the request is sent. Because a non-streamed
+//     completion sends nothing until it is done, this MUST equal the overall
+//     budget; a smaller value silently truncates long generations.
 //   - Overall provider timeout (300s): bounds the entire request/response
 //     cycle. A grounded reasoning run makes several upstream calls and can
 //     take well over a minute, so this is generous.
@@ -125,13 +137,13 @@ func New(cfg Config) (*Client, error) {
 // timeouts.
 func newPooledClient() *http.Client {
 	return &http.Client{
-		Timeout: 300 * time.Second,
+		Timeout: providerRequestTimeout,
 		Transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   10,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: providerRequestTimeout,
 			ExpectContinueTimeout: 1 * time.Second,
 			DialContext: (&net.Dialer{
 				Timeout: 10 * time.Second,
