@@ -40,7 +40,7 @@ models:
   - id: longcat-2.5-preview
     provider: openai
     upstream_model: LongCat-2.5-Preview
-    base_url: https://api.longcat.ai/openai/v1
+    base_url: https://api.longcat.ai/openai
     api_key_env: TEXT_LLM_API_KEY
     context_window: 1000000
     max_output_tokens: 131072

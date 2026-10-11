@@ -55,7 +55,7 @@ func TestLoadDeploymentRegistry(t *testing.T) {
 	text, ok := reg.Get("longcat-2.5-preview")
 	require.True(t, ok)
 	assert.Equal(t, "LongCat-2.5-Preview", text.UpstreamModel)
-	assert.Equal(t, "https://api.longcat.ai/openai/v1", text.BaseURL)
+	assert.Equal(t, "https://api.longcat.ai/openai", text.BaseURL)
 	assert.True(t, text.Supports("chat"))
 }
 

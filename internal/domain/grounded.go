@@ -145,6 +145,10 @@ const (
 // grounded vendor port (GroundedVendorClient.GroundedGenerate).
 type GroundedVendorRequest struct {
 	LogicalModelID LogicalModelID
+	// UpstreamModel is the registry upstream_model for the logical model — the
+	// concrete model name the vendor should call (e.g. "LongCat-2.5-Preview").
+	// Empty falls back to the logical id.
+	UpstreamModel string
 	// Directive is the Armor-screened learner directive.
 	Directive string
 	// MaxResults is the (hard-capped) citation cap.

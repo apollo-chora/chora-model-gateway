@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -403,6 +404,7 @@ func (c *Client) generateChat(ctx context.Context, apiKey string, req domain.Ven
 	defer func() { _ = httpResp.Body.Close() }()
 	respBody, _ := io.ReadAll(httpResp.Body)
 	if httpResp.StatusCode >= 400 {
+		slog.ErrorContext(ctx, "openai: upstream error", "url", url, "status", httpResp.StatusCode, "base", c.requestBase(req), "chat_path", c.chatCompletionsPath, "constructed_endpoint", c.endpoint)
 		return domain.VendorResponse{}, &ProviderError{
 			Status:   httpResp.StatusCode,
 			Endpoint: url,

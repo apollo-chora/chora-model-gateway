@@ -151,6 +151,7 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 	vendorName := string(s.grounded.Family())
 	vendorResp, err := s.grounded.GroundedGenerate(ctx, GroundedVendorRequest{
 		LogicalModelID: s.groundedModel(req),
+		UpstreamModel:  s.groundedUpstream(ctx, s.groundedModel(req)),
 		Directive:      directive,
 		MaxResults:     effectiveMaxResults(req.MaxResults),
 		Traceparent:    req.Traceparent,
@@ -272,6 +273,20 @@ func (s *Service) groundedModel(req GroundedSearchRequest) LogicalModelID {
 		return req.LogicalModelID
 	}
 	return DefaultGroundedModel
+}
+
+// groundedUpstream resolves the registry upstream_model for the grounded
+// logical model — the concrete model name the vendor calls (e.g.
+// "LongCat-2.5-Preview"). Empty when the registry has no entry.
+func (s *Service) groundedUpstream(ctx context.Context, id LogicalModelID) string {
+	if s.models == nil {
+		return ""
+	}
+	info, err := s.models.Resolve(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return info.UpstreamModel
 }
 
 // effectiveMaxResults clamps the caller's citation cap into [1, hard cap],

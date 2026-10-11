@@ -305,7 +305,10 @@ func (c *Client) synthesize(ctx context.Context, req domain.GroundedVendorReques
 	if c.chatAPIKey == "" {
 		return "", domain.TokenUsage{}, fmt.Errorf("exa grounded: TEXT_LLM_API_KEY not configured")
 	}
-	model := string(req.LogicalModelID)
+	model := strings.TrimSpace(req.UpstreamModel)
+	if model == "" {
+		model = string(req.LogicalModelID)
+	}
 	if model == "" {
 		model = c.chatModel
 	}
