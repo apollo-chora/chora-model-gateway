@@ -13,7 +13,7 @@ import (
 // (ADR-254 D9: familiar_companion -> companion_chat; the live chat binary
 // sends "companion_chat" since the fleet conversion).
 func TestDefaultPolicyLoader_ArmorTier(t *testing.T) {
-	cfg := runtimeConfig{project: "chora-489812", modelArmorLocation: "asia-southeast1", environment: "dev"}
+	cfg := runtimeConfig{project: "chora-489812", modelArmorLocation: "asia-southeast1", environment: "dev", armorEnabled: true}
 	loader := newDefaultPolicyLoader(cfg)
 
 	cases := []struct {
@@ -43,5 +43,22 @@ func TestDefaultPolicyLoader_ArmorTier(t *testing.T) {
 				t.Errorf("agent %q armor template = %q, want suffix %q", tc.agentID, p.ArmorTemplate, tc.want)
 			}
 		})
+	}
+}
+
+// A non-GCP deployment (CHORA_ARMOR_ENABLED=false) has no Google token for
+// Cloud Model Armor, so every agent screens nothing (permissive) regardless
+// of its enforced tier.
+func TestDefaultPolicyLoader_ArmorDisabled(t *testing.T) {
+	cfg := runtimeConfig{project: "chora-489812", modelArmorLocation: "asia-southeast1", environment: "dev", armorEnabled: false}
+	loader := newDefaultPolicyLoader(cfg)
+	for _, agentID := range []string{"companion_chat", "qgen_question", "kg_explorer", "never_heard_of_it"} {
+		p, err := loader.ResolveAgentPolicy(context.Background(), agentID, agentID, "longcat-2.5-preview", nil)
+		if err != nil {
+			t.Fatalf("ResolveAgentPolicy(%s): %v", agentID, err)
+		}
+		if p.ArmorTemplate != "" {
+			t.Errorf("agent %q armor template = %q, want empty (permissive) when armor disabled", agentID, p.ArmorTemplate)
+		}
 	}
 }

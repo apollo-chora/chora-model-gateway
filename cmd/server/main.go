@@ -567,6 +567,7 @@ type runtimeConfig struct {
 	enforceContentsScreen    bool          // CHORA_ARMOR_ENFORCE_CONTENTS_SCREEN, G1'-3: block on the derived-contents Armor leg instead of auditing it
 	enforceToolCallScreen    bool          // CHORA_ARMOR_ENFORCE_TOOL_CALL_SCREEN, G1'-2: block on the derived-tool-call Armor leg instead of auditing it
 	enforceToolsScreen       bool          // CHORA_ARMOR_ENFORCE_TOOLS_SCREEN, CHO-2391: block on the derived tool-DECLARATION Armor leg instead of auditing it
+	armorEnabled             bool          // CHORA_ARMOR_ENABLED — when false, no Model Armor screening (permissive); for non-GCP deployments where the Google token is unavailable
 	fallbackRetries          int           // CHORA_FALLBACK_RETRIES — extra same-provider attempts for a retryable failure (timeout / 429 / 5xx); 0 = advance to the next target
 	fallbackRetryBackoff     time.Duration // CHORA_FALLBACK_RETRY_BACKOFF_MS — delay before each same-provider retry
 	budgetRequired            bool          // CHORA_LLM_BUDGET_REQUIRED — fail-closed: a missing active budget window BLOCKS provider calls instead of allowing them (default false)
@@ -596,6 +597,7 @@ func loadConfig() (runtimeConfig, error) {
 		enforceContentsScreen:    os.Getenv("CHORA_ARMOR_ENFORCE_CONTENTS_SCREEN") == "true",
 		enforceToolCallScreen:    os.Getenv("CHORA_ARMOR_ENFORCE_TOOL_CALL_SCREEN") == "true",
 		enforceToolsScreen:       os.Getenv("CHORA_ARMOR_ENFORCE_TOOLS_SCREEN") == "true",
+		armorEnabled:             os.Getenv("CHORA_ARMOR_ENABLED") != "false",
 		fallbackRetries:          envInt("CHORA_FALLBACK_RETRIES", 0),
 		budgetRequired:            os.Getenv("CHORA_LLM_BUDGET_REQUIRED") == "true",
 		defaultTenantID:          os.Getenv("CHORA_DEFAULT_TENANT_ID"),
@@ -823,6 +825,7 @@ func openRepo(dsn string, timeout time.Duration) (*pg.Repo, func(), error) {
 type defaultPolicyLoader struct {
 	armorTemplateStrict   string
 	armorTemplateBalanced string
+	armorEnabled          bool
 }
 
 func newDefaultPolicyLoader(cfg runtimeConfig) *defaultPolicyLoader {
@@ -831,6 +834,7 @@ func newDefaultPolicyLoader(cfg runtimeConfig) *defaultPolicyLoader {
 			cfg.project, cfg.modelArmorLocation, cfg.environment),
 		armorTemplateBalanced: fmt.Sprintf("projects/%s/locations/%s/templates/chora-guardrail-balanced-%s",
 			cfg.project, cfg.modelArmorLocation, cfg.environment),
+		armorEnabled: cfg.armorEnabled,
 	}
 }
 
@@ -851,6 +855,12 @@ func (l *defaultPolicyLoader) ResolveAgentPolicy(ctx context.Context, agentID, c
 		ResolvedLogicalModelID: requested,
 		Vendor:                 domain.VendorFamilyVertexGemini,
 		ArmorTemplate:          l.armorTemplateBalanced,
+	}
+	// Non-GCP deployments (CHORA_ARMOR_ENABLED=false) have no Google token for
+	// Cloud Model Armor, so screen nothing (permissive). The LongCat + Exa
+	// paths are BYOA and do not depend on Armor.
+	if !l.armorEnabled {
+		policy.ArmorTemplate = ""
 	}
 	// Honour the agent-declared fallback chain against the resolved vendor.
 	for _, fm := range fallbackModels {
@@ -877,7 +887,9 @@ func (l *defaultPolicyLoader) ResolveAgentPolicy(ctx context.Context, agentID, c
 	// documented in the yaml). Pinned by cmd/server/policy_loader_test.go.
 	switch agentID {
 	case "qgen_question", "qgen_critic", "familiar_companion", "companion_chat":
-		policy.ArmorTemplate = l.armorTemplateStrict
+		if l.armorEnabled {
+			policy.ArmorTemplate = l.armorTemplateStrict
+		}
 	}
 	return policy, nil
 }
