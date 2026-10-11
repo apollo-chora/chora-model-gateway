@@ -727,8 +727,17 @@ type googleTokenProvider struct {
 }
 
 func (g *googleTokenProvider) Token(ctx context.Context) (string, error) {
-	if g == nil || g.src == nil {
-		return "", fmt.Errorf("modelgateway: token source not initialised")
+	if g.src == nil {
+		// Lazily resolve the Google token source on FIRST use so the gateway
+		// boots on non-GCP hosts (no ADC, no metadata server). The Google-
+		// backed paths — Gemini/Vertex and Model Armor — fail only when
+		// actually called; the LongCat + Exa text/grounded paths are BYOA and
+		// never reach this. On GKE the first call resolves ADC as before.
+		ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
+		if err != nil {
+			return "", fmt.Errorf("modelgateway: DefaultTokenSource: %w", err)
+		}
+		g.src = ts
 	}
 	tok, err := g.src.Token()
 	if err != nil {
@@ -738,11 +747,10 @@ func (g *googleTokenProvider) Token(ctx context.Context) (string, error) {
 }
 
 func newTokenProvider(ctx context.Context) (*googleTokenProvider, error) {
-	ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
-	if err != nil {
-		return nil, fmt.Errorf("modelgateway: DefaultTokenSource: %w", err)
-	}
-	return &googleTokenProvider{src: ts}, nil
+	// Non-GCP deployments have no ADC; the source is resolved lazily on the
+	// first .Token() call (see googleTokenProvider.Token) rather than at
+	// construction, so boot no longer requires Google credentials.
+	return &googleTokenProvider{}, nil
 }
 
 // ----------------------------------------------------------------------------
