@@ -63,7 +63,11 @@ type VendorRequest struct {
 	// route (e.g. the OpenAI-compatible longcat-2.5-preview on api.longcat.ai)
 	// dispatches to its own base_url rather than the provider default.
 	BaseURL string
-	Prompt string
+	// UpstreamModel is the registry upstream_model to send to the provider.
+	// When set it overrides the logical id as the wire model name (the logical
+	// id is a routing key, not necessarily the provider's model name).
+	UpstreamModel string
+	Prompt         string
 	// ResponseModality is the requested output modality ("" / "TEXT" /
 	// "IMAGE"). Vendor adapters that support image generation translate
 	// "IMAGE" into the vendor-native modality selector (W8, CR 2026-06-01).

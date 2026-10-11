@@ -401,7 +401,7 @@ func (c *Client) generateChat(ctx context.Context, apiKey string, req domain.Ven
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: unmarshal response: %w", err)
 	}
-	return parsed.toDomain(string(req.LogicalModelID)), nil
+	return parsed.toDomain(modelName(req)), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +442,7 @@ func (c *Client) generateResponses(ctx context.Context, apiKey string, req domai
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: unmarshal responses: %w", err)
 	}
-	return parsed.toDomain(string(req.LogicalModelID)), nil
+	return parsed.toDomain(modelName(req)), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -500,9 +500,20 @@ type openaiResponse struct {
 	} `json:"usage"`
 }
 
+// modelName returns the wire model name: the registry upstream_model when the
+// dispatcher set one, else the logical id. The logical id is a routing key
+// (e.g. "longcat-2.5-preview"), not necessarily the provider's model name
+// (e.g. "LongCat-2.5-Preview").
+func modelName(req domain.VendorRequest) string {
+	if s := strings.TrimSpace(req.UpstreamModel); s != "" {
+		return s
+	}
+	return string(req.LogicalModelID)
+}
+
 func buildOpenAIBody(req domain.VendorRequest) openaiBody {
 	body := openaiBody{
-		Model:  string(req.LogicalModelID),
+		Model:  modelName(req),
 		Stream: false,
 	}
 	// Build messages from ContentsJSON if present, else flat prompt.
