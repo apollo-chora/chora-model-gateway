@@ -201,43 +201,48 @@ func run() error {
 	}
 
 	// ---------------------------------------------------------------------
-	// Postgres adapter — opens *sql.DB to chora_observability via the
-	// cloudsql-proxy sidecar at 127.0.0.1:5432. DSN is FAIL-LOUD: fetched
-	// from Secret Manager by the secret ID in CHORA_OBSERVABILITY_DSN_SECRET_ID
-	// at boot. Per feedback_no_stubs_real_wiring no fallback to in-memory or
-	// no-op repos — if the DSN is unset, unfetchable, or the DB ping fails,
-	// the service exits non-zero so kubelet surfaces the misconfiguration as
-	// CrashLoopBackOff (the operational signal the user can see).
+	// Postgres adapter — opens *sql.DB to chora_observability. Two DSN
+	// sources:
+	//
+	//   1. CHORA_OBSERVABILITY_DSN — a direct Postgres DSN for non-GKE
+	//      deployments (no Secret Manager, no metadata-server token). When
+	//      set, the Secret Manager fetch is skipped entirely.
+	//
+	//   2. CHORA_OBSERVABILITY_DSN_SECRET_ID — the GKE path: the DSN is
+	//      FAIL-LOUD fetched from Secret Manager at boot (cloudsql-proxy
+	//      sidecar at 127.0.0.1:5432). Per feedback_no_stubs_real_wiring
+	//      there is no fallback to in-memory or no-op repos — if the DSN is
+	//      unset, unfetchable, or the DB ping fails, the service exits
+	//      non-zero so kubelet surfaces the misconfiguration as
+	//      CrashLoopBackOff.
 	// ---------------------------------------------------------------------
-	// Retry loop on the DSN fetch — mirrors the openRepo() retry pattern.
-	// The token-mint path inside ResolveSecret dials the GKE metadata-server
-	// at 169.254.169.254:80, which momentarily refuses connections on cold-
-	// start nodes (Pod scheduled before metadata-server daemonset's iptables
-	// rules take effect). The default behavior is fail-fast on conn-refused
-	// → service exits → 1 CrashLoop restart → 2nd attempt succeeds. This
-	// loop bounds the retry to cfg.dbConnectTimeout (90s default) and
-	// retries every 500ms, so the FIRST attempt succeeds gracefully without
-	// a CrashLoop. Backward-compatible — once the metadata-server is up the
-	// first ResolveSecret succeeds and the loop exits immediately.
-	dsnFetchCtx, dsnFetchCancel := context.WithTimeout(ctx, cfg.dbConnectTimeout)
-	defer dsnFetchCancel()
-	var (
-		dsn     string
-		lastErr error
-	)
-	for {
-		attemptCtx, attemptCancel := context.WithTimeout(dsnFetchCtx, 10*time.Second)
-		dsn, lastErr = secretClient.ResolveSecret(attemptCtx, cfg.observabilityDSNSecretID)
-		attemptCancel()
-		if lastErr == nil {
-			break
-		}
-		select {
-		case <-dsnFetchCtx.Done():
-			return fmt.Errorf("postgres adapter: fetch DSN secret %q (gave up after %s): %w",
-				cfg.observabilityDSNSecretID, cfg.dbConnectTimeout, lastErr)
-		case <-time.After(500 * time.Millisecond):
-			// retry — likely transient metadata-server cold-start
+	var dsn string
+	if cfg.directDSN != "" {
+		dsn = cfg.directDSN
+	} else {
+		// Retry loop on the DSN fetch — mirrors the openRepo() retry pattern.
+		// The token-mint path inside ResolveSecret dials the GKE
+		// metadata-server at 169.254.169.254:80, which momentarily refuses
+		// connections on cold-start nodes. The loop bounds the retry to
+		// cfg.dbConnectTimeout (90s default) and retries every 500ms so the
+		// FIRST attempt succeeds gracefully once the metadata-server is up.
+		dsnFetchCtx, dsnFetchCancel := context.WithTimeout(ctx, cfg.dbConnectTimeout)
+		defer dsnFetchCancel()
+		var lastErr error
+		for {
+			attemptCtx, attemptCancel := context.WithTimeout(dsnFetchCtx, 10*time.Second)
+			dsn, lastErr = secretClient.ResolveSecret(attemptCtx, cfg.observabilityDSNSecretID)
+			attemptCancel()
+			if lastErr == nil {
+				break
+			}
+			select {
+			case <-dsnFetchCtx.Done():
+				return fmt.Errorf("postgres adapter: fetch DSN secret %q (gave up after %s): %w",
+					cfg.observabilityDSNSecretID, cfg.dbConnectTimeout, lastErr)
+			case <-time.After(500 * time.Millisecond):
+				// retry — likely transient metadata-server cold-start
+			}
 		}
 	}
 	repo, dbCleanup, err := openRepo(dsn, cfg.dbConnectTimeout)
@@ -555,6 +560,7 @@ type runtimeConfig struct {
 	httpPort                 int
 	gatewayVersion           string
 	observabilityDSNSecretID string // Secret Manager ID — DSN fetched at boot, fail-loud
+	directDSN                string // CHORA_OBSERVABILITY_DSN — direct Postgres DSN for non-GKE deployments (skips Secret Manager)
 	dbConnectTimeout         time.Duration
 	identityGRPCAddr         string        // CHORA_IDENTITY_GRPC_ADDR — WS-1 mana metering port (fail-loud)
 	manaStrictOnError        bool          // CHORA_MANA_STRICT_ON_ERROR — block fail-closed actions when the meter errors
@@ -584,6 +590,7 @@ func loadConfig() (runtimeConfig, error) {
 		httpPort:                 envInt("CHORA_HTTP_PORT", 8080),
 		gatewayVersion:           envOr("SERVICE_VERSION", "chora-model-gateway:dev"),
 		observabilityDSNSecretID: os.Getenv("CHORA_OBSERVABILITY_DSN_SECRET_ID"),
+		directDSN:                os.Getenv("CHORA_OBSERVABILITY_DSN"),
 		identityGRPCAddr:         os.Getenv("CHORA_IDENTITY_GRPC_ADDR"),
 		manaStrictOnError:        os.Getenv("CHORA_MANA_STRICT_ON_ERROR") == "true",
 		enforceContentsScreen:    os.Getenv("CHORA_ARMOR_ENFORCE_CONTENTS_SCREEN") == "true",
@@ -659,16 +666,17 @@ func loadConfig() (runtimeConfig, error) {
 	cfg.defaultTenantID = envOr("CHORA_DEFAULT_TENANT_ID", "")
 	cfg.defaultGCID = envOr("CHORA_DEFAULT_GCID", "")
 	cfg.defaultAgentID = envOr("CHORA_DEFAULT_AGENT_ID", "openai_compat")
-	// Validate non-empty required-by-env fields. observabilityDSNSecretID
-	// is FAIL-LOUD per feedback_no_stubs_real_wiring — no fallback path,
-	// no in-memory mode.
+	// Validate non-empty required-by-env fields. The observability DSN has
+	// two mutually-exclusive sources (see the Postgres adapter below): a
+	// direct CHORA_OBSERVABILITY_DSN for non-GKE deployments, or the Secret
+	// Manager ID for GKE. At least one must be present — the chosen source is
+	// FAIL-LOUD per feedback_no_stubs_real_wiring (no in-memory fallback).
 	for k, v := range map[string]string{
-		"GCP_PROJECT":                       cfg.project,
-		"CHORA_ENVIRONMENT":                 cfg.environment,
-		"VERTEX_AI_LOCATION":                cfg.vertexAILocation,
-		"CHORA_EMBED_VERTEX_LOCATION":       cfg.embedVertexLocation,
-		"MODEL_ARMOR_LOCATION":              cfg.modelArmorLocation,
-		"CHORA_OBSERVABILITY_DSN_SECRET_ID": cfg.observabilityDSNSecretID,
+		"GCP_PROJECT":                 cfg.project,
+		"CHORA_ENVIRONMENT":           cfg.environment,
+		"VERTEX_AI_LOCATION":          cfg.vertexAILocation,
+		"CHORA_EMBED_VERTEX_LOCATION": cfg.embedVertexLocation,
+		"MODEL_ARMOR_LOCATION":        cfg.modelArmorLocation,
 		// WS-1 umbrella metering is load-bearing (ADR-142 §4) — no silent
 		// un-metered fallback (feedback_no_stubs_real_wiring). grpc.NewClient is
 		// lazy, so a present-but-temporarily-down identity does not block boot.
@@ -677,6 +685,9 @@ func loadConfig() (runtimeConfig, error) {
 		if strings.TrimSpace(v) == "" {
 			return cfg, fmt.Errorf("env %s required", k)
 		}
+	}
+	if cfg.directDSN == "" && strings.TrimSpace(cfg.observabilityDSNSecretID) == "" {
+		return cfg, fmt.Errorf("env CHORA_OBSERVABILITY_DSN or CHORA_OBSERVABILITY_DSN_SECRET_ID required")
 	}
 	return cfg, nil
 }
