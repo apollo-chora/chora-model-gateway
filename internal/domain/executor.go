@@ -710,6 +710,17 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 		}
 	}
 
+	// The registry's provider for the logical model is the AUTHORITATIVE
+	// dispatch vendor — the policy's Vendor is the agent default (a Gemini-era
+	// hardcoded value). Resolve it so a non-Gemini registry route (e.g. the
+	// OpenAI-compatible longcat-2.5-preview) dispatches to the matching
+	// provider instead of the Gemini one.
+	if e.fallback != nil && e.fallback.models != nil {
+		if info, merr := e.fallback.models.Resolve(ctx, policy.ResolvedLogicalModelID); merr == nil && info.Vendor != "" {
+			policy.Vendor = info.Vendor
+		}
+	}
+
 	// Step 4 — keyed idempotency claim (→ CLAIMED). A redelivered dispatch
 	// with the same key must bill once, so the claim is taken BEFORE any
 	// spend. The claim result suppresses BOTH the tenant-budget debit
