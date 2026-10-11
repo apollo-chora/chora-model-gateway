@@ -67,9 +67,13 @@ WORKDIR /src/services/${SERVICE_NAME}
 
 RUN go mod download all 2>/dev/null || go mod download
 
+# GOARCH is a build-arg (default amd64 for GKE linux/amd64 nodes) so the same
+# Dockerfile builds for other architectures — e.g. --build-arg GOARCH=arm64 for
+# non-GKE hosts. The runtime stage is distroless/static (arch-agnostic).
+ARG GOARCH=amd64
 ENV CGO_ENABLED=0 \
     GOOS=linux \
-    GOARCH=amd64
+    GOARCH=${GOARCH}
 RUN go build -trimpath \
       -ldflags "-s -w \
         -X main.serviceName=${SERVICE_NAME} \
