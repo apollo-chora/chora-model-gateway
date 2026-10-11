@@ -623,3 +623,53 @@ var _ domain.Provider = (*fakeVendor)(nil)
 
 // fixedTime is defined in service_test.go (same package); this file reuses it.
 var _ = time.Now // keep time import if unused in future edits
+
+// The agent-declared fallback chain must take its vendor from the REGISTRY, not
+// inherit the policy loader's hardcoded default. The loader stamps every chain
+// entry with the policy Vendor — a Gemini-era constant — so without the
+// executor's per-entry re-resolve a primary failure walks into a provider this
+// deployment holds no credentials for. Observed live as
+// `all 2 provider attempts failed; last provider "vertex_ai_gemini"`.
+//
+// The policy below names Vertex for BOTH targets and no Vertex provider is
+// wired, so a regression fails the run outright instead of passing quietly.
+func TestExecute_FallbackVendorResolvesFromTheRegistry(t *testing.T) {
+	primary := &fakeVendor{
+		family: domain.VendorFamilyOpenAI,
+		err:    errors.New("primary provider down"),
+	}
+	fallback := &fakeVendor{
+		family: domain.VendorFamilyAnthropic,
+		resp: domain.VendorResponse{
+			Completion:   "served by the fallback",
+			ModelVersion: "fallback-model",
+			FinishReason: domain.FinishReasonComplete,
+		},
+	}
+
+	executor, _, _, _, _, _ := newTestExecutor(t, func(cfg *domain.ExecutorConfig) {
+		cfg.Providers = []domain.Provider{primary, fallback}
+		cfg.Policies = &fakePolicy{policy: domain.AgentPolicy{
+			AgentID:                "qgen_question",
+			ResolvedLogicalModelID: domain.LogicalModelID("longcat-2.5-preview"),
+			Vendor:                 domain.VendorFamilyVertexGemini,
+			FallbackChain: []domain.AgentPolicyFallback{{
+				Vendor:                 domain.VendorFamilyVertexGemini,
+				ResolvedLogicalModelID: domain.LogicalModelID("fallback-model"),
+			}},
+		}}
+		cfg.Models = &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
+			"longcat-2.5-preview": {ID: "longcat-2.5-preview", Vendor: domain.VendorFamilyOpenAI},
+			"fallback-model":      {ID: "fallback-model", Vendor: domain.VendorFamilyAnthropic},
+		}}
+	})
+
+	req := happyExecuteRequest()
+	req.LogicalModelID = domain.LogicalModelID("longcat-2.5-preview")
+	req.FallbackModelIDs = []domain.LogicalModelID{"fallback-model"}
+
+	_, err := executor.Execute(context.Background(), req)
+	require.NoError(t, err, "the fallback must be reachable: its vendor comes from the registry, not the policy")
+	assert.Equal(t, 1, primary.calls, "the primary is attempted first")
+	assert.Equal(t, 1, fallback.calls, "the fallback dispatches to its REGISTRY vendor")
+}

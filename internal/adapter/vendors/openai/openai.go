@@ -105,16 +105,21 @@ func New(cfg Config) (*Client, error) {
 	}, nil
 }
 
-// providerRequestTimeout bounds one provider request end to end. A
-// non-streamed completion (the wire shape this adapter sends) returns NO
-// response headers until the model has finished generating, so the
-// response-header timeout must cover the WHOLE generation, not just the
-// provider's time-to-first-byte. A shorter header timeout aborts a long
-// generation while the provider is still working — observed live as
-// `net/http: timeout awaiting response headers` at exactly 30s on a
+// providerRequestTimeout bounds the wait for a non-streamed completion to
+// produce its RESPONSE HEADERS. For this adapter's wire shape that is the whole
+// generation: nothing is sent until the model has finished. A shorter value
+// aborts a long generation while the provider is still working — observed live
+// as `net/http: timeout awaiting response headers` at exactly 30s on a
 // LongCat-2.5-Preview reasoning run, which surfaced upstream as
 // "all N provider attempts failed".
 const providerRequestTimeout = 300 * time.Second
+
+// providerResponseBudget bounds the ENTIRE request/response cycle, and stays
+// strictly larger than providerRequestTimeout. They are different bounds: the
+// header wait and the body transfer are sequential, so a completion whose
+// headers land just under the header deadline still needs time to send its
+// body. Setting both to the same value truncates exactly that tail.
+const providerResponseBudget = providerRequestTimeout + 60*time.Second
 
 // newPooledClient returns an *http.Client with connection pooling and a
 // layered timeout hierarchy:
@@ -122,13 +127,13 @@ const providerRequestTimeout = 300 * time.Second
 //   - Connection timeout (10s): bounds TCP dial + TLS handshake. A provider
 //     that accepts the TCP connection but never completes the handshake is
 //     cut off here.
-//   - Response-header timeout (= the overall budget): bounds the wait for the
-//     first response byte after the request is sent. Because a non-streamed
-//     completion sends nothing until it is done, this MUST equal the overall
-//     budget; a smaller value silently truncates long generations.
-//   - Overall provider timeout (300s): bounds the entire request/response
-//     cycle. A grounded reasoning run makes several upstream calls and can
-//     take well over a minute, so this is generous.
+//   - Response-header timeout (= the generation budget): bounds the wait for
+//     the first response byte after the request is sent. Because a
+//     non-streamed completion sends nothing until it is done, this must cover
+//     the whole generation; a smaller value silently truncates long ones.
+//   - Overall provider timeout (the generation budget + headroom): bounds the
+//     entire request/response cycle, so the body transfer after a
+//     late-arriving header still has room.
 //
 // The overall timeout is enforced by the http.Client.Timeout field; the
 // connection and response-header timeouts are enforced by the Transport.
@@ -137,7 +142,7 @@ const providerRequestTimeout = 300 * time.Second
 // timeouts.
 func newPooledClient() *http.Client {
 	return &http.Client{
-		Timeout: providerRequestTimeout,
+		Timeout: providerResponseBudget,
 		Transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   10,
@@ -175,7 +180,7 @@ func (c *Client) Generate(ctx context.Context, req domain.VendorRequest) (domain
 	}
 
 	if req.ResponseModality == "IMAGE" {
-		return c.GenerateImage(ctx, req)
+		return c.generateImage(ctx, apiKey, req)
 	}
 	if isGrounded(req) {
 		return c.generateResponses(ctx, apiKey, req)
@@ -201,12 +206,19 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 	if err := domain.CheckContextCancellation(ctx); err != nil {
 		return domain.VendorResponse{}, err
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		return domain.VendorResponse{}, fmt.Errorf("openai: image generation requires a prompt")
-	}
 	apiKey, err := c.resolveApiKey(ctx, req)
 	if err != nil {
 		return domain.VendorResponse{}, err
+	}
+	return c.generateImage(ctx, apiKey, req)
+}
+
+// generateImage is the image path with the credential already resolved, so a
+// caller that resolved one (Generate) does not trigger a second lookup — on the
+// BYOA route that lookup is a Secret Manager round trip.
+func (c *Client) generateImage(ctx context.Context, apiKey string, req domain.VendorRequest) (domain.VendorResponse, error) {
+	if strings.TrimSpace(req.Prompt) == "" {
+		return domain.VendorResponse{}, fmt.Errorf("openai: image generation requires a prompt")
 	}
 
 	body := buildImageBody(req)
@@ -227,8 +239,14 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 	}
 	c.setHeaders(httpReq, apiKey)
 
+	start := time.Now()
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		// A transport failure carries no HTTP status, so without this line it
+		// leaves no trace — which is exactly how a 30s ResponseHeaderTimeout
+		// aborted every real generation with nothing in the logs.
+		slog.ErrorContext(ctx, "openai: image transport error", "url", url,
+			"elapsed_ms", time.Since(start).Milliseconds(), "err", err)
 		return domain.VendorResponse{}, fmt.Errorf("openai: image HTTP do: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
@@ -244,7 +262,9 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: unmarshal image response: %w", err)
 	}
-	return parsed.toDomain(string(req.LogicalModelID), c.endpoint, c.imagesPath), nil
+	// Reported identity follows the resolved route (the registry upstream_model),
+	// matching the chat path, rather than the adapter's construction defaults.
+	return parsed.toDomain(modelName(req), c.requestBase(req), c.imagesPath), nil
 }
 
 // EmbedText produces one text embedding via the OpenAI embeddings
@@ -421,8 +441,15 @@ func (c *Client) generateChat(ctx context.Context, apiKey string, req domain.Ven
 	}
 	c.setHeaders(httpReq, apiKey)
 
+	start := time.Now()
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		// A transport failure (timeout, reset, DNS) carries no HTTP status, so
+		// without this line it leaves no trace — which is exactly how a 30s
+		// ResponseHeaderTimeout aborted every real generation silently. The
+		// elapsed time is what makes a timeout obvious at a glance.
+		slog.ErrorContext(ctx, "openai: transport error", "url", url,
+			"elapsed_ms", time.Since(start).Milliseconds(), "err", err)
 		return domain.VendorResponse{}, fmt.Errorf("openai: HTTP do: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
