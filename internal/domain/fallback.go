@@ -861,6 +861,7 @@ func (e *FallbackEngine) prepareTarget(ctx context.Context, run FallbackRun, tar
 		}
 		req.BaseURL = info.BaseURL
 		req.UpstreamModel = info.UpstreamModel
+		req.APIKey = info.APIKey
 		if run.RequiredCapability != "" && !info.Supports(run.RequiredCapability) {
 			return VendorRequest{}, &CapabilityError{
 				Model:      target.LogicalModelID,

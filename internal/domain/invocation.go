@@ -67,7 +67,11 @@ type VendorRequest struct {
 	// When set it overrides the logical id as the wire model name (the logical
 	// id is a routing key, not necessarily the provider's model name).
 	UpstreamModel string
-	Prompt         string
+	// APIKey is the registry-declared credential (resolved from api_key_env).
+	// When set the provider uses it verbatim; otherwise it falls back to the
+	// BYOA/global Secret Manager resolution.
+	APIKey string
+	Prompt string
 	// ResponseModality is the requested output modality ("" / "TEXT" /
 	// "IMAGE"). Vendor adapters that support image generation translate
 	// "IMAGE" into the vendor-native modality selector (W8, CR 2026-06-01).

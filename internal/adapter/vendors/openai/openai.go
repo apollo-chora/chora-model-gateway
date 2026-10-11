@@ -152,7 +152,7 @@ func (c *Client) Generate(ctx context.Context, req domain.VendorRequest) (domain
 	if err := domain.CheckContextCancellation(ctx); err != nil {
 		return domain.VendorResponse{}, err
 	}
-	apiKey, err := c.resolveKey(ctx, req.TenantID)
+	apiKey, err := c.resolveApiKey(ctx, req)
 	if err != nil {
 		return domain.VendorResponse{}, err
 	}
@@ -161,6 +161,18 @@ func (c *Client) Generate(ctx context.Context, req domain.VendorRequest) (domain
 		return c.generateResponses(ctx, apiKey, req)
 	}
 	return c.generateChat(ctx, apiKey, req)
+}
+
+// resolveApiKey prefers the registry-declared credential (resolved from the
+// entry's api_key_env) and falls back to the BYOA/global Secret Manager
+// resolution only when the registry carries none. On non-GCP deployments the
+// Secret Manager path is unavailable, so the registry env key is the only
+// source.
+func (c *Client) resolveApiKey(ctx context.Context, req domain.VendorRequest) (string, error) {
+	if k := strings.TrimSpace(req.APIKey); k != "" {
+		return k, nil
+	}
+	return c.resolveKey(ctx, req.TenantID)
 }
 
 // GenerateImage generates an image via the OpenAI images/generations
@@ -172,7 +184,7 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 	if strings.TrimSpace(req.Prompt) == "" {
 		return domain.VendorResponse{}, fmt.Errorf("openai: image generation requires a prompt")
 	}
-	apiKey, err := c.resolveKey(ctx, req.TenantID)
+	apiKey, err := c.resolveApiKey(ctx, req)
 	if err != nil {
 		return domain.VendorResponse{}, err
 	}
