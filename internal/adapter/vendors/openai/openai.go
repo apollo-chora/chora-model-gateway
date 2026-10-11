@@ -157,10 +157,14 @@ func (c *Client) Family() domain.VendorFamily { return domain.VendorFamilyOpenAI
 
 // Generate — implements domain.VendorClient.
 //
-// Dispatches to the responses API when the request is grounded (carries a
-// web_search tool in ToolsJSON), otherwise to chat completions. The
-// responses API is OpenAI's hosted web-search surface; chat completions
-// is the plain text/tool-call surface.
+// Dispatches on the request's surface: an IMAGE-modality request rides the
+// images/generations endpoint, a grounded request (carries a web_search tool
+// in ToolsJSON) rides the responses API — OpenAI's hosted web-search surface —
+// and everything else is a plain chat completion.
+//
+// The IMAGE branch is load-bearing: the dispatch walk reaches vendors through
+// Generate alone, so without it an image-modality call was sent to
+// chat/completions and every renderer request 404'd.
 func (c *Client) Generate(ctx context.Context, req domain.VendorRequest) (domain.VendorResponse, error) {
 	if err := domain.CheckContextCancellation(ctx); err != nil {
 		return domain.VendorResponse{}, err
@@ -170,6 +174,9 @@ func (c *Client) Generate(ctx context.Context, req domain.VendorRequest) (domain
 		return domain.VendorResponse{}, err
 	}
 
+	if req.ResponseModality == "IMAGE" {
+		return c.GenerateImage(ctx, req)
+	}
 	if isGrounded(req) {
 		return c.generateResponses(ctx, apiKey, req)
 	}
@@ -208,7 +215,12 @@ func (c *Client) GenerateImage(ctx context.Context, req domain.VendorRequest) (d
 		return domain.VendorResponse{}, fmt.Errorf("openai: marshal image request: %w", err)
 	}
 
-	url := c.resolveEndpoint(c.imagesPath, "/images/generations")
+	// The route is the RESOLVED registry route, not the adapter's construction
+	// default: req.BaseURL is the registry base_url and c.imagesPath the
+	// adapter's images path, so a Meta/OpenRouter entry is served against its
+	// own host — never against api.openai.com, which is what the previous
+	// resolveEndpoint(c.imagesPath, …) produced.
+	url := c.resolveEndpointFor(c.requestBase(req), c.imagesPath, "/images/generations")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
 	if err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: build image request: %w", err)
@@ -869,7 +881,11 @@ type imageResponse struct {
 
 func buildImageBody(req domain.VendorRequest) imageBody {
 	return imageBody{
-		Model:  string(req.LogicalModelID),
+		// modelName, not the logical id: the registry upstream_model is the
+		// provider's name for the model, while the logical id is a routing key
+		// — an alias (the renderer's gemini-2.5-flash-image fallback, or
+		// gemini-3-pro-image) is not a model the provider knows.
+		Model:  modelName(req),
 		Prompt: req.Prompt,
 		N:      1,
 	}

@@ -156,6 +156,47 @@ func TestOpenAI_GenerateContentFilter(t *testing.T) {
 	assert.Equal(t, domain.FinishReasonModelArmorBlock, resp.FinishReason)
 }
 
+// An IMAGE-modality request must ride the images endpoint of the RESOLVED
+// registry route: not chat/completions (the dispatch walk reaches vendors
+// through Generate alone, so this modality branch is what picks the surface),
+// and not the adapter's construction endpoint (the request's registry
+// base_url wins). Both were wrong, which turned every renderer call into a
+// chat completion against api.openai.com and a 404.
+func TestOpenAI_GenerateRoutesImageModalityToTheRegistryImagesEndpoint(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+
+	var gotPath, gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotModel, _ = body["model"].(string)
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(png) + `"}]}`))
+	}))
+	defer srv.Close()
+
+	// Built against a decoy endpoint on purpose.
+	c, err := openai.New(openai.Config{
+		HTTPClient: srv.Client(),
+		Secrets:    stubSecrets{byoa: "k"},
+		Endpoint:   "https://api.openai.com",
+	})
+	require.NoError(t, err)
+
+	resp, err := c.Generate(context.Background(), domain.VendorRequest{
+		LogicalModelID:   "muse-image",
+		UpstreamModel:    "muse-image-1.0",
+		BaseURL:          srv.URL + "/v1",
+		APIKey:           "k",
+		Prompt:           "a labelled diagram of a plant cell",
+		ResponseModality: "IMAGE",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/v1/images/generations", gotPath, "an image-modality request must ride the images endpoint")
+	assert.Equal(t, "muse-image-1.0", gotModel, "the wire model is the registry upstream_model")
+	assert.Equal(t, png, resp.ImageBytes)
+}
+
 func TestOpenAI_NewValidation(t *testing.T) {
 	_, err := openai.New(openai.Config{Secrets: nil})
 	require.Error(t, err)
