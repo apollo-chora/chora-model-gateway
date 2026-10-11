@@ -19,14 +19,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      # The service's go.mod replaces (`../chora-contracts/gen/go`,
+      # `../chora-common`) resolve against FLAT sibling directories, so the
+      # three repos are checked out as neighbours and the build runs from the
+      # workspace root. Checking this repo out at the root (the previous shape)
+      # failed on every run: `COPY services/chora-model-gateway/: not found`.
+      - name: Check out this service
         uses: actions/checkout@v7
+        with:
+          path: chora-model-gateway
 
-      - name: Check out chora-contracts (sibling path dependency)
+      - name: Check out chora-common (replaced by ../chora-common)
+        uses: actions/checkout@v7
+        with:
+          repository: apollo-chora/chora-common
+          path: chora-common
+
+      - name: Check out chora-contracts (replaced by ../chora-contracts/gen/go)
         uses: actions/checkout@v7
         with:
           repository: apollo-chora/chora-contracts
           path: chora-contracts
+
+      # The build context is this assembled workspace, so the .dockerignore
+      # that applies is the one at its root — without this the three .git
+      # directories ride along in the context.
+      - name: Trim the build context
+        run: printf '%s\n' '.git' '**/.git' > .dockerignore
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -55,13 +74,13 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          build-contexts: |
-            chora-contracts=./chora-contracts
+          file: chora-model-gateway/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            SERVICE_NAME=chora-model-gateway
             GIT_SHA=${{ github.sha }}
             BUILD_TIME=${{ steps.meta.outputs.created }}
           cache-from: type=gha
