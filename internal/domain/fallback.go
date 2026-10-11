@@ -859,6 +859,7 @@ func (e *FallbackEngine) prepareTarget(ctx context.Context, run FallbackRun, tar
 				Inner:  err,
 			}
 		}
+		req.BaseURL = info.BaseURL
 		if run.RequiredCapability != "" && !info.Supports(run.RequiredCapability) {
 			return VendorRequest{}, &CapabilityError{
 				Model:      target.LogicalModelID,

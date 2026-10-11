@@ -58,7 +58,12 @@ const (
 type VendorRequest struct {
 	Vendor         VendorFamily
 	LogicalModelID LogicalModelID
-	Prompt         string
+	// BaseURL is the registry-declared endpoint for this logical model. When
+	// set it overrides the provider's constructed endpoint, so a registry
+	// route (e.g. the OpenAI-compatible longcat-2.5-preview on api.longcat.ai)
+	// dispatches to its own base_url rather than the provider default.
+	BaseURL string
+	Prompt string
 	// ResponseModality is the requested output modality ("" / "TEXT" /
 	// "IMAGE"). Vendor adapters that support image generation translate
 	// "IMAGE" into the vendor-native modality selector (W8, CR 2026-06-01).

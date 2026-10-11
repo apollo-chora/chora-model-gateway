@@ -351,13 +351,16 @@ func (c *Client) setHeaders(httpReq *http.Request, apiKey string) {
 // override. An absolute http(s) URL is used verbatim; a relative path is
 // joined onto the base endpoint.
 func (c *Client) resolveEndpoint(path, defaultPath string) string {
-	if path == "" {
-		path = defaultPath
+	return c.resolveEndpointFor(c.endpoint, path, defaultPath)
+}
+
+// requestBase returns the registry-declared base_url when the request carries
+// one, else the constructed endpoint.
+func (c *Client) requestBase(req domain.VendorRequest) string {
+	if req.BaseURL != "" {
+		return strings.TrimRight(req.BaseURL, "/")
 	}
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return path
-	}
-	return strings.TrimRight(c.endpoint, "/") + "/" + strings.TrimLeft(path, "/")
+	return c.endpoint
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +377,7 @@ func (c *Client) generateChat(ctx context.Context, apiKey string, req domain.Ven
 		return domain.VendorResponse{}, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
-	url := c.resolveEndpoint(c.chatCompletionsPath, "/v1/chat/completions")
+	url := c.resolveEndpointFor(c.requestBase(req), c.chatCompletionsPath, "/v1/chat/completions")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
 	if err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: build request: %w", err)
@@ -415,7 +418,7 @@ func (c *Client) generateResponses(ctx context.Context, apiKey string, req domai
 		return domain.VendorResponse{}, fmt.Errorf("openai: marshal responses request: %w", err)
 	}
 
-	url := c.resolveEndpoint(c.responsesPath, "/v1/responses")
+	url := c.resolveEndpointFor(c.requestBase(req), c.responsesPath, "/v1/responses")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawBody))
 	if err != nil {
 		return domain.VendorResponse{}, fmt.Errorf("openai: build responses request: %w", err)
