@@ -26,17 +26,12 @@ import (
 // than serving a route the operator did not approve.
 // ============================================================================
 
-// Defaults for the approved demo route. The upstream model id is the current
-// committed value (chora-stack/config/model-gateway/models.prod.yaml); the
-// provider host is the OpenRouter endpoint the deployment points
-// EMBEDDING_LLM_BASE_URL at. The dimension is the width LiquidAI's LFM2.5
-// produces and the deployment's pgvector columns hold (vector(1024)).
-const (
-	defaultEmbeddingPinLogicalID     = "text-embedding-004"
-	defaultEmbeddingPinUpstreamModel = "liquid/lfm-2.5-embedding-350m:free"
-	defaultEmbeddingPinProviderHost  = "openrouter.ai"
-	defaultEmbeddingPinDimensions    = 1024
-)
+// defaultEmbeddingPinDimensions is the vector width the deployment's pgvector
+// columns hold (vector(1024)). Every pin field that names a model or a host is
+// ENV-ONLY (CHORA_EMBEDDING_PIN_LOGICAL_ID / _UPSTREAM_MODEL / _PROVIDER_HOST):
+// there is no built-in default model, and an ENABLED pin with a blank field
+// fails the boot.
+const defaultEmbeddingPinDimensions = 1024
 
 // embeddingPinConfig is the parsed CHORA_EMBEDDING_PIN_* configuration.
 type embeddingPinConfig struct {
@@ -58,9 +53,9 @@ type embeddingPinConfig struct {
 func loadEmbeddingPinConfig() (embeddingPinConfig, error) {
 	cfg := embeddingPinConfig{
 		Enabled:       os.Getenv("CHORA_EMBEDDING_PIN_ENABLED") == "true",
-		LogicalID:     envOr("CHORA_EMBEDDING_PIN_LOGICAL_ID", defaultEmbeddingPinLogicalID),
-		UpstreamModel: envOr("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL", defaultEmbeddingPinUpstreamModel),
-		ProviderHost:  envOr("CHORA_EMBEDDING_PIN_PROVIDER_HOST", defaultEmbeddingPinProviderHost),
+		LogicalID:     strings.TrimSpace(os.Getenv("CHORA_EMBEDDING_PIN_LOGICAL_ID")),
+		UpstreamModel: strings.TrimSpace(os.Getenv("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL")),
+		ProviderHost:  strings.TrimSpace(os.Getenv("CHORA_EMBEDDING_PIN_PROVIDER_HOST")),
 	}
 	if !cfg.Enabled {
 		return cfg, nil

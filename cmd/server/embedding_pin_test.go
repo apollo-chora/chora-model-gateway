@@ -32,11 +32,19 @@ func pinRegistry(t *testing.T, spec registry.ModelSpec) registry.Registry {
 	return reg
 }
 
+// The pin is env-only (CHORA_EMBEDDING_PIN_*): there is no built-in default
+// model, so the tests name their own neutral fixtures.
+const (
+	testPinLogicalID     = "chora-embedding-test"
+	testPinUpstreamModel = "test-embedding-upstream"
+	testPinProviderHost  = "openrouter.ai"
+)
+
 func approvedPinSpec() registry.ModelSpec {
 	return registry.ModelSpec{
-		ID:            defaultEmbeddingPinLogicalID,
+		ID:            testPinLogicalID,
 		Provider:      "openai",
-		UpstreamModel: defaultEmbeddingPinUpstreamModel,
+		UpstreamModel: testPinUpstreamModel,
 		BaseURL:       "https://openrouter.ai/api/v1",
 		Capabilities:  []string{"embeddings"},
 		APIKeyEnv:     "EMBEDDING_LLM_API_KEY",
@@ -54,9 +62,9 @@ func approvedPinEnv(t *testing.T) {
 func enabledPin() embeddingPinConfig {
 	return embeddingPinConfig{
 		Enabled:       true,
-		LogicalID:     defaultEmbeddingPinLogicalID,
-		UpstreamModel: defaultEmbeddingPinUpstreamModel,
-		ProviderHost:  defaultEmbeddingPinProviderHost,
+		LogicalID:     testPinLogicalID,
+		UpstreamModel: testPinUpstreamModel,
+		ProviderHost:  testPinProviderHost,
 		Dimensions:    defaultEmbeddingPinDimensions,
 	}
 }
@@ -163,6 +171,9 @@ func TestVerifyEmbeddingRoutePin_AdapterMismatchFails(t *testing.T) {
 func TestLoadEmbeddingPinConfig_DefaultsAndStrictness(t *testing.T) {
 	t.Setenv("CHORA_EMBEDDING_PIN_ENABLED", "")
 	t.Setenv("CHORA_EMBEDDING_PIN_DIMENSIONS", "")
+	t.Setenv("CHORA_EMBEDDING_PIN_LOGICAL_ID", "")
+	t.Setenv("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL", "")
+	t.Setenv("CHORA_EMBEDDING_PIN_PROVIDER_HOST", "")
 	cfg, err := loadEmbeddingPinConfig()
 	if err != nil {
 		t.Fatalf("loadEmbeddingPinConfig: %v", err)
@@ -170,23 +181,29 @@ func TestLoadEmbeddingPinConfig_DefaultsAndStrictness(t *testing.T) {
 	if cfg.Enabled {
 		t.Fatal("the pin must default to disabled")
 	}
-	if cfg.LogicalID != defaultEmbeddingPinLogicalID || cfg.UpstreamModel != defaultEmbeddingPinUpstreamModel {
-		t.Fatalf("unexpected defaults: %+v", cfg)
+	if cfg.LogicalID != "" || cfg.UpstreamModel != "" || cfg.ProviderHost != "" {
+		t.Fatalf("every model/host pin field is env-only and has no default; got %+v", cfg)
 	}
 	if cfg.domainPin() != nil {
 		t.Fatal("a disabled pin must not produce a domain pin")
 	}
 
-	// Enabled: the defaults are applied and a domain pin is produced. The pin
-	// carries the approved vector length, so the Embed flow can require it
-	// without the deployment registry declaring it.
+	// Enabled: the env-provided values are used verbatim and a domain pin is
+	// produced. The pin carries the configured vector length, so the Embed flow
+	// can require it without a registry entry declaring it.
 	t.Setenv("CHORA_EMBEDDING_PIN_ENABLED", "true")
+	t.Setenv("CHORA_EMBEDDING_PIN_LOGICAL_ID", testPinLogicalID)
+	t.Setenv("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL", testPinUpstreamModel)
+	t.Setenv("CHORA_EMBEDDING_PIN_PROVIDER_HOST", testPinProviderHost)
 	cfg, err = loadEmbeddingPinConfig()
 	if err != nil {
 		t.Fatalf("loadEmbeddingPinConfig: %v", err)
 	}
 	if !cfg.Enabled || cfg.domainPin() == nil {
 		t.Fatal("an enabled pin must produce a domain pin")
+	}
+	if cfg.LogicalID != testPinLogicalID || cfg.UpstreamModel != testPinUpstreamModel || cfg.ProviderHost != testPinProviderHost {
+		t.Fatalf("the pin must carry the env-provided values; got %+v", cfg)
 	}
 	if cfg.Dimensions != defaultEmbeddingPinDimensions {
 		t.Fatalf("the pin must default to %d dimensions; got %d", defaultEmbeddingPinDimensions, cfg.Dimensions)
@@ -205,10 +222,16 @@ func TestLoadEmbeddingPinConfig_DefaultsAndStrictness(t *testing.T) {
 		t.Fatal("a non-numeric approved dimension must fail the boot")
 	}
 
-	// Enabled with a blank upstream fails the boot.
+	// Enabled with a blank upstream, or a blank logical id, fails the boot: the
+	// pin is env-only and a half-specified pin would verify nothing.
 	t.Setenv("CHORA_EMBEDDING_PIN_DIMENSIONS", "")
 	t.Setenv("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL", " ")
 	if _, err := loadEmbeddingPinConfig(); err == nil {
 		t.Fatal("a blank approved model id must fail the boot")
+	}
+	t.Setenv("CHORA_EMBEDDING_PIN_UPSTREAM_MODEL", testPinUpstreamModel)
+	t.Setenv("CHORA_EMBEDDING_PIN_LOGICAL_ID", " ")
+	if _, err := loadEmbeddingPinConfig(); err == nil {
+		t.Fatal("a blank pinned logical id must fail the boot")
 	}
 }
