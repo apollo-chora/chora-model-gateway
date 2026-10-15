@@ -1,11 +1,11 @@
 // Package exa implements domain.GroundedVendorClient against the Exa search
 // API (api.exa.ai), replacing Vertex "Grounding with Google Search" (ADR-231).
 //
-// Flow: Exa search/retrieve → LongCat synthesis of the grounded answer, behind
-// the SAME GroundedVendorClient port so the domain governance chain (egress
-// gate, mana, Armor PRE/POST, audit) is unchanged. The Exa result text is
-// UNTRUSTED CONTENT: it is fenced into the synthesis prompt as data, never
-// as instructions.
+// Flow: Exa search/retrieve → OpenAI-compatible synthesis of the grounded
+// answer, behind the SAME GroundedVendorClient port so the domain governance
+// chain (egress gate, mana, Armor PRE/POST, audit) is unchanged. The Exa result
+// text is UNTRUSTED CONTENT: it is fenced into the synthesis prompt as data,
+// never as instructions.
 package exa
 
 import (
@@ -28,13 +28,6 @@ const (
 	// exaHost is the Exa API root. The search surface is POST /search.
 	exaHost = "https://api.exa.ai"
 
-	// defaultChatEndpoint is the OpenAI-compatible root used for synthesis
-	// when TEXT_LLM_BASE_URL is unset (the platform's single text route).
-	defaultChatEndpoint = "https://api.longcat.ai/openai/v1"
-	// defaultChatModel is the upstream synthesis model when the request
-	// carries no logical id.
-	defaultChatModel = "LongCat-2.5-Preview"
-
 	// maxRetries bounds same-request retries on retryable failures (429/5xx).
 	maxRetries = 3
 	// retryBase is the floor backoff before jitter; Retry-After wins when the
@@ -53,11 +46,13 @@ const (
 	// broad search cannot blow the synthesis context window.
 	maxEvidenceChars = 30_000
 
-	// longcat rates mirror the registry entry for longcat-2.5-preview
-	// ($0.30/1M input, $1.20/1M output). Kept as constants here (the gemini
-	// adapter does the same with its pricing table) — update both together.
-	longcatInputPerMtokMicros  int64 = 300_000
-	longcatOutputPerMtokMicros int64 = 1_200_000
+	// Synthesis token rates (USD micros per million tokens). The env-built
+	// registry carries NO pricing, so the adapter accounts the grounded
+	// synthesis leg itself (the gemini adapter does the same with its own
+	// pricing table). OPERATOR-TUNABLE — update both together when the
+	// synthesis model's published rates change.
+	synthesisInputPerMtokMicros  int64 = 300_000
+	synthesisOutputPerMtokMicros int64 = 1_200_000
 
 	synthesisMaxTokens = 2048
 )
@@ -70,7 +65,7 @@ type Config struct {
 	APIKey       string                // EXA_API_KEY — required for any egress
 	ChatEndpoint string                // TEXT_LLM_BASE_URL (root, no path)
 	ChatAPIKey   string                // TEXT_LLM_API_KEY
-	ChatModel    string                // optional; defaults to defaultChatModel
+	ChatModel    string                // optional; falls back to the request's resolved model
 	ExaHost      string                // optional override (tests / proxies)
 }
 
@@ -84,39 +79,48 @@ type Client struct {
 	chatModel    string
 }
 
-// New constructs a Client. Fail-loud on nothing — a missing key fails closed
-// PER CALL (GroundedSearch stays bootable in dev without credentials).
+// New constructs a Client. Fail-loud on nothing — a missing key or synthesis
+// endpoint fails closed PER CALL (GroundedSearch stays bootable in dev without
+// credentials). The synthesis endpoint and model come from the environment
+// (TEXT_LLM_BASE_URL, and the resolved registry upstream_model); there is no
+// built-in default model.
 func New(cfg Config) (*Client, error) {
 	hc := cfg.HTTPClient
 	if hc == nil {
 		hc = newPooledClient()
 	}
-	endpoint := cfg.ChatEndpoint
-	if endpoint == "" {
-		endpoint = defaultChatEndpoint
-	}
 	host := cfg.ExaHost
 	if host == "" {
 		host = exaHost
-	}
-	model := cfg.ChatModel
-	if model == "" {
-		model = defaultChatModel
 	}
 	return &Client{
 		httpClient:   hc,
 		apiKey:       cfg.APIKey,
 		exaHost:      strings.TrimRight(host, "/"),
-		chatEndpoint: strings.TrimRight(endpoint, "/"),
+		chatEndpoint: strings.TrimRight(cfg.ChatEndpoint, "/"),
 		chatAPIKey:   cfg.ChatAPIKey,
-		chatModel:    model,
+		chatModel:    strings.TrimSpace(cfg.ChatModel),
 	}, nil
+}
+
+// synthesisModel resolves the model the synthesis call names: the resolved
+// registry upstream_model when the dispatcher set one, else the request's
+// logical id, else the adapter's configured ChatModel. Empty means no model
+// could be resolved, and synthesize refuses rather than guessing.
+func (c *Client) synthesisModel(req domain.GroundedVendorRequest) string {
+	if m := strings.TrimSpace(req.UpstreamModel); m != "" {
+		return m
+	}
+	if m := strings.TrimSpace(string(req.LogicalModelID)); m != "" {
+		return m
+	}
+	return c.chatModel
 }
 
 // Family returns the VendorFamily backing grounded search.
 func (c *Client) Family() domain.VendorFamily { return domain.VendorFamilyExa }
 
-// GroundedGenerate runs Exa search + LongCat synthesis and maps the result
+// GroundedGenerate runs Exa search + grounded synthesis and maps the result
 // onto the grounded vendor contract. On synthesis failure AFTER a billable
 // search it returns the response WITH the Exa usage recorded plus the error,
 // so the domain service can account the partial spend.
@@ -129,7 +133,7 @@ func (c *Client) GroundedGenerate(ctx context.Context, req domain.GroundedVendor
 	}
 
 	resp := domain.GroundedVendorResponse{
-		ModelVersion: c.chatModel,
+		ModelVersion:     c.synthesisModel(req),
 		WebSearchQueries: []string{req.Directive},
 		Usage: domain.TokenUsage{
 			GroundingUnits: 1,
@@ -282,7 +286,7 @@ func (c *Client) search(ctx context.Context, directive string, maxResults int32,
 }
 
 // ---------------------------------------------------------------------------
-// LongCat synthesis (OpenAI-compatible chat/completions)
+// Grounded synthesis (OpenAI-compatible chat/completions)
 // ---------------------------------------------------------------------------
 
 type exaChatResponse struct {
@@ -298,19 +302,19 @@ type exaChatResponse struct {
 	} `json:"usage"`
 }
 
-// synthesize fences the retrieved sources as DATA and asks LongCat for a
-// citation-grounded answer. The system prompt is the citation mandate (IMDA
-// D2): the answer must rest on the provided sources.
+// synthesize fences the retrieved sources as DATA and asks the resolved
+// synthesis model for a citation-grounded answer. The system prompt is the
+// citation mandate (IMDA D2): the answer must rest on the provided sources.
 func (c *Client) synthesize(ctx context.Context, req domain.GroundedVendorRequest, evidence []string) (string, domain.TokenUsage, error) {
 	if c.chatAPIKey == "" {
 		return "", domain.TokenUsage{}, fmt.Errorf("exa grounded: TEXT_LLM_API_KEY not configured")
 	}
-	model := strings.TrimSpace(req.UpstreamModel)
-	if model == "" {
-		model = string(req.LogicalModelID)
+	if c.chatEndpoint == "" {
+		return "", domain.TokenUsage{}, fmt.Errorf("exa grounded: TEXT_LLM_BASE_URL not configured")
 	}
+	model := c.synthesisModel(req)
 	if model == "" {
-		model = c.chatModel
+		return "", domain.TokenUsage{}, fmt.Errorf("exa grounded: no synthesis model resolved (set TEXT_LLM_MODEL or the registry upstream_model)")
 	}
 	userPrompt := req.Directive
 	if len(evidence) > 0 {
@@ -362,8 +366,8 @@ func (c *Client) synthesize(ctx context.Context, req domain.GroundedVendorReques
 					InputTokens:  parsed.Usage.PromptTokens,
 					OutputTokens: parsed.Usage.CompletionTokens,
 				}
-				usage.CostMicros = usage.InputTokens*longcatInputPerMtokMicros/1_000_000 +
-					usage.OutputTokens*longcatOutputPerMtokMicros/1_000_000
+				usage.CostMicros = usage.InputTokens*synthesisInputPerMtokMicros/1_000_000 +
+					usage.OutputTokens*synthesisOutputPerMtokMicros/1_000_000
 				return parsed.Choices[0].Message.Content, usage, nil
 			case httpResp.StatusCode == http.StatusTooManyRequests || httpResp.StatusCode >= 500:
 				lastErr = &domain.ProviderError{Status: httpResp.StatusCode, Endpoint: httpReq.URL.String(), Body: strings.TrimSpace(string(respBody))}

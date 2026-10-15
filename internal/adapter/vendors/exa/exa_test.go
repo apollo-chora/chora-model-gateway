@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubServers pairs an Exa search stub with a LongCat chat stub, capturing
+// stubServers pairs an Exa search stub with a chat-synthesis stub, capturing
 // what each received.
 type stubServers struct {
 	exa       *httptest.Server
@@ -56,7 +56,10 @@ func newClient(s *stubServers) *exa.Client {
 		APIKey:       "exa-key",
 		ChatEndpoint: s.chat.URL,
 		ChatAPIKey:   "chat-key",
-		ExaHost:      s.exa.URL,
+		// The synthesis model the deployment resolves (TEXT_LLM_MODEL). The
+		// adapter has no built-in default model.
+		ChatModel: "chora-text-test",
+		ExaHost:   s.exa.URL,
 	})
 	if err != nil {
 		panic(err)
@@ -80,7 +83,7 @@ func TestExa_GroundedGenerate_HappyPath(t *testing.T) {
 	]}`, 200, `{"choices":[{"message":{"content":"synthesised"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`)
 
 	resp, err := newClient(s).GroundedGenerate(context.Background(), domain.GroundedVendorRequest{
-		LogicalModelID: "longcat-2.5-preview",
+		LogicalModelID: "chora-text-test",
 		Directive:      "what is alpha",
 		MaxResults:     5,
 	})
@@ -88,7 +91,8 @@ func TestExa_GroundedGenerate_HappyPath(t *testing.T) {
 
 	assert.Equal(t, "synthesised", resp.Answer)
 	assert.Equal(t, domain.FinishReasonComplete, resp.FinishReason)
-	assert.Equal(t, "LongCat-2.5-Preview", resp.ModelVersion)
+	assert.Equal(t, "chora-text-test", resp.ModelVersion)
+	assert.Equal(t, "chora-text-test", s.lastChatBody["model"], "the resolved model must reach the wire")
 	assert.Equal(t, []string{"what is alpha"}, resp.WebSearchQueries)
 	assert.Empty(t, resp.SearchEntryPointHTML, "Exa has no Google search-entry chip")
 
@@ -99,7 +103,7 @@ func TestExa_GroundedGenerate_HappyPath(t *testing.T) {
 	assert.Equal(t, "alpha body", resp.Citations[0].Snippet)
 	assert.InDelta(t, 0.9, resp.Citations[0].Confidence, 0.001)
 
-	// Usage = Exa surcharge + LongCat token cost (100 in, 10 out).
+	// Usage = Exa surcharge + synthesis token cost (100 in, 10 out).
 	assert.Equal(t, int64(100), resp.Usage.InputTokens)
 	assert.Equal(t, int64(10), resp.Usage.OutputTokens)
 	assert.Equal(t, int64(1), resp.Usage.GroundingUnits)
