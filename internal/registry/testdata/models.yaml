@@ -1,5 +1,5 @@
-# Test registry for internal/registry tests. Mirrors the shape of
-# config/models.yaml: every entry declares id, provider, base_url and the
+# Test registry for internal/registry tests. Mirrors the shape of the
+# env-built role specs: every entry declares id, provider, base_url and the
 # dispatch-relevant knobs.
 models:
   - id: gpt-4o
@@ -37,7 +37,7 @@ models:
     aliases: [fast, quick]
 
   # Image generation — priced per call, so the token table is zero.
-  - id: gpt-image-1
+  - id: test-image-model
     provider: openai
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
@@ -46,7 +46,7 @@ models:
 
   # Self-hosted: no credential, which is what an absent api_key_env
   # expresses.
-  - id: local-llama
+  - id: test-local-model
     provider: openai
     upstream_model: llama3.1:8b
     base_url: http://host.docker.internal:11434/v1
@@ -58,7 +58,7 @@ models:
 
   # A fully custom chat-completions endpoint: base_url is ignored for this
   # surface because chat_completions_path is absolute.
-  - id: internal-llm
+  - id: test-internal-endpoint
     provider: openai
     upstream_model: chora-sg-academic
     base_url: https://llm.internal.example.com/v1
@@ -110,7 +110,7 @@ models:
       max_uses: 5
 
   # Embeddings surface.
-  - id: text-embedding-004
+  - id: chora-embedding-test
     provider: openai
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY

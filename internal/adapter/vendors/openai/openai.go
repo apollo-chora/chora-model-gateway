@@ -110,7 +110,7 @@ func New(cfg Config) (*Client, error) {
 // generation: nothing is sent until the model has finished. A shorter value
 // aborts a long generation while the provider is still working — observed live
 // as `net/http: timeout awaiting response headers` at exactly 30s on a
-// LongCat-2.5-Preview reasoning run, which surfaced upstream as
+// reasoning-model run, which surfaced upstream as
 // "all N provider attempts failed".
 const providerRequestTimeout = 300 * time.Second
 
@@ -566,9 +566,8 @@ type openaiResponse struct {
 }
 
 // modelName returns the wire model name: the registry upstream_model when the
-// dispatcher set one, else the logical id. The logical id is a routing key
-// (e.g. "longcat-2.5-preview"), not necessarily the provider's model name
-// (e.g. "LongCat-2.5-Preview").
+// dispatcher set one, else the logical id. The logical id is a routing key,
+// not necessarily the provider's model name.
 func modelName(req domain.VendorRequest) string {
 	if s := strings.TrimSpace(req.UpstreamModel); s != "" {
 		return s

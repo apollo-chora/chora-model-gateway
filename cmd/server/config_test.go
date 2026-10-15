@@ -20,7 +20,7 @@ func setRequiredBootEnv(t *testing.T) {
 
 // The embed location must default to the ADR-163 regional endpoint and must
 // NOT follow VERTEX_AI_LOCATION: the live gateway legitimately runs Gemini on
-// "global", and text-embedding-004 is only served regionally.
+// "global", and publisher embedding models are only served regionally.
 func TestLoadConfig_EmbedVertexLocationIndependentOfGeminiLocation(t *testing.T) {
 	setRequiredBootEnv(t)
 	t.Setenv("VERTEX_AI_LOCATION", "global")

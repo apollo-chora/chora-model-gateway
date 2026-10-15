@@ -42,6 +42,14 @@ func Load(path string) (Registry, error) {
 	return Finalize(ApplyEnv(specs))
 }
 
+// LoadFromEnv builds the registry from the role-based environment
+// configuration alone (TEXT_LLM_*, IMAGE_LLM_*, EMBEDDING_LLM_*). There is no
+// registry file and no built-in default model: a deployment with no role
+// configured fails the boot with "no models configured".
+func LoadFromEnv() (Registry, error) {
+	return Finalize(ApplyEnv(nil))
+}
+
 // ParseYAML parses + per-row validates registry YAML bytes. It does NOT
 // layer the role-based env configuration (see ApplyEnv) and does NOT run
 // the cross-entry checks (see Finalize).

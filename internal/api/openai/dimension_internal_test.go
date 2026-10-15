@@ -15,10 +15,10 @@ import (
 // gateway-controlled message relayed.
 func TestMapDimensionMismatchError_InvalidRequest(t *testing.T) {
 	err := fmt.Errorf("embed: vendor dispatch: %w", &domain.DimensionMismatchError{
-		Model:    "text-embedding-004",
+		Model:    "chora-embedding-test",
 		Expected: 1024,
 		Actual:   768,
-		Detail:   "embed: model \"text-embedding-004\" returned a 768-dimensional vector, expected 1024; refusing (never truncated or padded)",
+		Detail:   "embed: model \"chora-embedding-test\" returned a 768-dimensional vector, expected 1024; refusing (never truncated or padded)",
 	})
 	got := mapEmbedError(err)
 	if got.status != http.StatusBadRequest {

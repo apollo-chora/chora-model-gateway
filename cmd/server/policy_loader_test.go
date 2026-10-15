@@ -53,7 +53,7 @@ func TestDefaultPolicyLoader_ArmorDisabled(t *testing.T) {
 	cfg := runtimeConfig{project: "chora-489812", modelArmorLocation: "asia-southeast1", environment: "dev", armorEnabled: false}
 	loader := newDefaultPolicyLoader(cfg)
 	for _, agentID := range []string{"companion_chat", "qgen_question", "kg_explorer", "never_heard_of_it"} {
-		p, err := loader.ResolveAgentPolicy(context.Background(), agentID, agentID, "longcat-2.5-preview", nil)
+		p, err := loader.ResolveAgentPolicy(context.Background(), agentID, agentID, "chora-text-test", nil)
 		if err != nil {
 			t.Fatalf("ResolveAgentPolicy(%s): %v", agentID, err)
 		}

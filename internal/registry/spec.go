@@ -1,7 +1,11 @@
-// Package registry is the YAML-based model registry for the model gateway.
-// Ported from the Python reference (chora-model-gateway-python/app/config.py +
-// config/models.yaml): the registry file IS the catalogue — adding a model is
-// an edit to the YAML, not a code change.
+// Package registry builds the model gateway's catalogue of logical models.
+//
+// Production builds it ENTIRELY from the role-based environment configuration
+// (TEXT_LLM_*, IMAGE_LLM_*, EMBEDDING_LLM_*) via LoadFromEnv: there is no
+// registry file and no built-in default model, and adding a model is an env
+// change, not a code change. The YAML parsing path (Load / ParseYAML) is
+// retained for tests and mirrors the Python reference
+// (chora-model-gateway-python/app/config.py).
 //
 // The package is standalone: it carries no domain, gRPC, or cloud imports so
 // it can be consumed by any adapter (HTTP, gRPC, dispatch) without pulling

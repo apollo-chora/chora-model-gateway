@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -349,26 +350,41 @@ func checkEmbedResponseLength(values []float32, id LogicalModelID, expected int3
 	return nil
 }
 
-// embedCredentialHosts lists the provider hosts that authenticate every
-// request. The credential rule is per HOST, not per provider token: the token
-// only says which wire shape is spoken, and the same `openai` shape is served
-// by self-hosted servers that legitimately need no credential at all. The
-// hosted endpoints this deployment can reach are listed, so an entry re-pointed
-// at one of them without a credential is refused instead of dispatched
-// anonymously.
+// embedCredentialHosts lists the well-known hosted providers that authenticate
+// every request. The credential rule is per HOST, not per provider token: the
+// token only says which wire shape is spoken, and the same `openai` shape is
+// served by self-hosted servers that legitimately need no credential at all.
 var embedCredentialHosts = map[string]bool{
 	"api.openai.com":    true,
 	"api.anthropic.com": true,
 	"openrouter.ai":     true,
-	"api.longcat.ai":    true,
-	"api.meta.ai":       true,
 }
 
+// roleBaseURLEnvVars are the role-based env vars whose hosts the deployment
+// reaches for text, image and embedding traffic. They are treated as
+// credential-requiring alongside the well-known providers above, so an entry
+// re-pointed at a deployment endpoint without a credential is refused instead
+// of dispatched anonymously.
+var roleBaseURLEnvVars = []string{"TEXT_LLM_BASE_URL", "IMAGE_LLM_BASE_URL", "EMBEDDING_LLM_BASE_URL"}
+
 // hostRequiresCredential reports whether the entry's endpoint is a hosted
-// provider that authenticates every request. A URL that does not parse has no
-// host and is left to the base-URL/dispatch checks.
+// provider that authenticates every request: a well-known provider host, or one
+// of the hosts this deployment points its own role base URLs at. A URL that
+// does not parse has no host and is left to the base-URL/dispatch checks.
 func hostRequiresCredential(baseURL string) bool {
-	return embedCredentialHosts[hostOfBaseURL(baseURL)]
+	host := hostOfBaseURL(baseURL)
+	if host == "" {
+		return false
+	}
+	if embedCredentialHosts[host] {
+		return true
+	}
+	for _, key := range roleBaseURLEnvVars {
+		if hostOfBaseURL(os.Getenv(key)) == host {
+			return true
+		}
+	}
+	return false
 }
 
 // hostOfBaseURL extracts the host of an absolute http(s) URL, lowercased.

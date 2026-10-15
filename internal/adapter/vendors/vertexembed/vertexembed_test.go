@@ -43,7 +43,7 @@ func TestEmbedText_happyPath(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	resp, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{
-		LogicalModelID:   "text-embedding-004",
+		LogicalModelID:   "chora-embedding-test",
 		Text:             "fractions",
 		TaskType:         "RETRIEVAL_QUERY",
 		OutputDimensions: 768,
@@ -57,10 +57,10 @@ func TestEmbedText_happyPath(t *testing.T) {
 	if resp.InputTokens != 9 {
 		t.Errorf("vendor token_count must surface; got %d", resp.InputTokens)
 	}
-	if resp.ModelVersion != "text-embedding-004" {
+	if resp.ModelVersion != "chora-embedding-test" {
 		t.Errorf("model_version = %q", resp.ModelVersion)
 	}
-	if !strings.Contains(gotPath, "publishers/google/models/text-embedding-004:predict") {
+	if !strings.Contains(gotPath, "publishers/google/models/chora-embedding-test:predict") {
 		t.Errorf("path = %q", gotPath)
 	}
 	if gotAuth != "Bearer tok-1" {
@@ -79,7 +79,7 @@ func TestEmbedText_defaultsTaskTypeToDocument(t *testing.T) {
 	}))
 	defer srv.Close()
 	c, _ := New(Config{Tokens: staticTokens{"t"}, Project: "p", Location: "l", Endpoint: srv.URL, HTTPClient: srv.Client()})
-	if _, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "text-embedding-004", Text: "x", OutputDimensions: 768}); err != nil {
+	if _, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "chora-embedding-test", Text: "x", OutputDimensions: 768}); err != nil {
 		t.Fatalf("EmbedText: %v", err)
 	}
 	if gotBody.Instances[0].TaskType != "RETRIEVAL_DOCUMENT" {
@@ -93,7 +93,7 @@ func TestEmbedText_httpErrorSurfacesLoud(t *testing.T) {
 	}))
 	defer srv.Close()
 	c, _ := New(Config{Tokens: staticTokens{"t"}, Project: "p", Location: "l", Endpoint: srv.URL, HTTPClient: srv.Client()})
-	_, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "text-embedding-004", Text: "x", OutputDimensions: 768})
+	_, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "chora-embedding-test", Text: "x", OutputDimensions: 768})
 	if err == nil || !strings.Contains(err.Error(), "429") {
 		t.Fatalf("HTTP error must surface with status; got %v", err)
 	}
@@ -105,7 +105,7 @@ func TestEmbedText_emptyPredictionIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 	c, _ := New(Config{Tokens: staticTokens{"t"}, Project: "p", Location: "l", Endpoint: srv.URL, HTTPClient: srv.Client()})
-	if _, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "text-embedding-004", Text: "x", OutputDimensions: 768}); err == nil {
+	if _, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{LogicalModelID: "chora-embedding-test", Text: "x", OutputDimensions: 768}); err == nil {
 		t.Fatal("empty prediction must be an error, never a silent zero-vector")
 	}
 }

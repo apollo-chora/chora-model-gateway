@@ -184,8 +184,8 @@ func TestOpenAI_GenerateRoutesImageModalityToTheRegistryImagesEndpoint(t *testin
 	require.NoError(t, err)
 
 	resp, err := c.Generate(context.Background(), domain.VendorRequest{
-		LogicalModelID:   "muse-image",
-		UpstreamModel:    "muse-image-1.0",
+		LogicalModelID:   "test-image-model",
+		UpstreamModel:    "test-image-model-1.0",
 		BaseURL:          srv.URL + "/v1",
 		APIKey:           "k",
 		Prompt:           "a labelled diagram of a plant cell",
@@ -193,7 +193,7 @@ func TestOpenAI_GenerateRoutesImageModalityToTheRegistryImagesEndpoint(t *testin
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "/v1/images/generations", gotPath, "an image-modality request must ride the images endpoint")
-	assert.Equal(t, "muse-image-1.0", gotModel, "the wire model is the registry upstream_model")
+	assert.Equal(t, "test-image-model-1.0", gotModel, "the wire model is the registry upstream_model")
 	assert.Equal(t, png, resp.ImageBytes)
 }
 
@@ -641,7 +641,7 @@ func TestOpenAI_EmbedText(t *testing.T) {
 // Release B: the adapter must dispatch to the RESOLVED registry route, not to
 // the endpoint it was constructed with. The domain Embed flow resolves the
 // logical model and hands the adapter the registry's upstream_model and
-// base_url; a logical id is an alias, so `text-embedding-004` here is served
+// base_url; a logical id is an alias, so `chora-embedding-test` here is served
 // from the OpenRouter upstream the registry declares.
 func TestOpenAI_EmbedText_ResolvedRouteOverridesConstructionEndpoint(t *testing.T) {
 	var capturedBody map[string]any
@@ -666,7 +666,7 @@ func TestOpenAI_EmbedText_ResolvedRouteOverridesConstructionEndpoint(t *testing.
 	require.NoError(t, err)
 
 	resp, err := c.EmbedText(context.Background(), domain.EmbedVendorRequest{
-		LogicalModelID:   "text-embedding-004",
+		LogicalModelID:   "chora-embedding-test",
 		UpstreamModel:    "liquid/lfm-2.5-embedding-350m:free",
 		BaseURL:          srv.URL,
 		Text:             "adding fractions with unlike denominators",
@@ -777,7 +777,7 @@ func TestOpenAI_EmbedText_UsesTheResolvedEntryCredential(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
-		LogicalModelID: "text-embedding-004",
+		LogicalModelID: "chora-embedding-test",
 		UpstreamModel:  "liquid/lfm-2.5-embedding-350m:free",
 		BaseURL:        srv.URL,
 		APIKey:         "openrouter-key",
@@ -836,7 +836,7 @@ func TestOpenAI_EmbedText_DeclaredCredentialMissing_IsRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = c.EmbedText(context.Background(), domain.EmbedVendorRequest{
-		LogicalModelID: "text-embedding-004",
+		LogicalModelID: "chora-embedding-test",
 		BaseURL:        srv.URL,
 		APIKeyEnv:      "EMBEDDING_LLM_API_KEY",
 		Text:           "hello",

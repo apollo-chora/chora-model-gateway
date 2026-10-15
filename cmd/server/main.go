@@ -188,8 +188,8 @@ func run() error {
 	// registry and dispatches through the adapter registered for the
 	// RESOLVED provider family. The registry's provider set is openai /
 	// anthropic only, so no registry entry can select the Vertex adapter —
-	// which is exactly the point. `text-embedding-004` is the deployment's
-	// embedding ROUTE (an alias), not a claim about the vendor.
+	// which is exactly the point. The deployment's embedding logical id
+	// (EMBEDDING_LLM_MODEL) names a ROUTE (an alias), not a vendor.
 	embedClient, err := vertexembed.New(vertexembed.Config{
 		HTTPClient: &http.Client{Timeout: cfg.vendorHTTPTimeout},
 		Tokens:     tokens,
@@ -252,11 +252,13 @@ func run() error {
 	defer dbCleanup()
 
 	// ---------------------------------------------------------------------
-	// Model registry — the YAML-based catalogue the domain service resolves
-	// model metadata (capabilities, output ceiling, credentials, grounding)
-	// through. Loaded from CHORA_MODEL_REGISTRY (default config/models.yaml).
+	// Model registry — the catalogue the domain service resolves model
+	// metadata (capabilities, output ceiling, credentials, grounding) through.
+	// Built ENTIRELY from the role-based environment (TEXT_LLM_*, IMAGE_LLM_*,
+	// EMBEDDING_LLM_*); there is no registry file and no built-in default
+	// model, so a deployment that configures no role fails the boot here.
 	// ---------------------------------------------------------------------
-	modelRegistry, err := registry.Load(envOr("CHORA_MODEL_REGISTRY", "config/models.yaml"))
+	modelRegistry, err := registry.LoadFromEnv()
 	if err != nil {
 		return fmt.Errorf("model registry: %w", err)
 	}
@@ -270,8 +272,9 @@ func run() error {
 	// Demo-deployment embedding-route pin: assert the EFFECTIVE loaded registry
 	// still maps the pinned logical id to the approved upstream model, with no
 	// fallbacks, and that the wired embedding adapter honours that entry. This
-	// is the file the running gateway actually loaded (CHORA_MODEL_REGISTRY),
-	// not a repo copy. Disabled by default; when enabled a mismatch fails boot.
+	// is the registry the running gateway actually built from the environment
+	// (TEXT_LLM_* / IMAGE_LLM_* / EMBEDDING_LLM_*), not a repo file. Disabled
+	// by default; when enabled a mismatch fails boot.
 	if err := verifyEmbeddingRoutePin(modelRegistry, embedders, cfg.embeddingPin); err != nil {
 		return fmt.Errorf("embedding route pin: %w", err)
 	}
@@ -281,7 +284,6 @@ func run() error {
 			"upstream_model", cfg.embeddingPin.UpstreamModel,
 			"expected_dimensions", cfg.embeddingPin.Dimensions,
 			"embedding_adapters", embedderFamilies(embedders),
-			"registry", envOr("CHORA_MODEL_REGISTRY", "config/models.yaml"),
 		)
 	}
 	modelResolver, err := registryadapter.NewResolver(modelRegistry)
@@ -551,9 +553,9 @@ type runtimeConfig struct {
 	// vertexAILocation drives the GEMINI vendor adapter; live it is "global".
 	vertexAILocation string
 	// embedVertexLocation drives the EMBEDDING vendor adapter separately:
-	// publisher embedding models (text-embedding-004) are NOT served at the
-	// global endpoint, only regionally (ADR-163). Wiring embeds onto the
-	// Gemini location 404s live (G1' gap 1, found 2026-08-13).
+	// publisher embedding models are NOT served at the global endpoint, only
+	// regionally (ADR-163). Wiring embeds onto the Gemini location 404s live
+	// (G1' gap 1, found 2026-08-13).
 	embedVertexLocation      string
 	modelArmorLocation       string
 	grpcPort                 int

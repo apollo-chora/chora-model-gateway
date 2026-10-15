@@ -62,20 +62,20 @@ func TestLoadTestdataRegistry(t *testing.T) {
 	assert.Equal(t, "gpt-4o", chain[0].ID)
 
 	// Image entry: kind derived from capabilities, zero pricing.
-	image, ok := reg.Get("gpt-image-1")
+	image, ok := reg.Get("test-image-model")
 	require.True(t, ok)
 	assert.Equal(t, registry.KindImage, image.Kind)
 	assert.True(t, image.Supports("image"))
 	assert.False(t, image.Supports("chat"))
 
 	// Self-hosted: no api_key_env, extra headers preserved.
-	local, ok := reg.Get("local-llama")
+	local, ok := reg.Get("test-local-model")
 	require.True(t, ok)
 	assert.Equal(t, "", local.APIKeyEnv)
 	assert.Equal(t, "chora", local.ExtraHeaders["X-Tenant"])
 
 	// Absolute endpoint override wins verbatim.
-	internal, ok := reg.Get("internal-llm")
+	internal, ok := reg.Get("test-internal-endpoint")
 	require.True(t, ok)
 	assert.Equal(t, "https://llm.internal.example.com/generate", internal.ChatURL())
 
@@ -100,7 +100,7 @@ func TestLoadTestdataRegistry(t *testing.T) {
 	assert.Equal(t, "web_search_20250305", claudeSearch.Grounding.EffectiveToolType("messages"))
 
 	// Embedding entry.
-	embed, ok := reg.Get("text-embedding-004")
+	embed, ok := reg.Get("chora-embedding-test")
 	require.True(t, ok)
 	assert.Equal(t, registry.KindEmbedding, embed.Kind)
 	assert.Equal(t, "https://api.openai.com/v1/embeddings", embed.EmbeddingsURL())
@@ -115,6 +115,40 @@ func TestLoadMissingFileFallsBackToEnv(t *testing.T) {
 	spec, ok := reg.Get("env-model")
 	require.True(t, ok)
 	assert.Equal(t, "env-model", spec.UpstreamModel)
+}
+
+// LoadFromEnv builds the registry from the role-based environment ALONE: no
+// file is read, and the env-provided model becomes the spec's id AND upstream.
+func TestLoadFromEnvBuildsFromEnvOnly(t *testing.T) {
+	clearEnvRoleVars(t)
+	t.Setenv("TEXT_LLM_MODEL", "env-text-model")
+	t.Setenv("EMBEDDING_LLM_MODEL", "env-embedding-model")
+
+	reg, err := registry.LoadFromEnv()
+	require.NoError(t, err)
+
+	text, ok := reg.Get("env-text-model")
+	require.True(t, ok)
+	assert.Equal(t, "env-text-model", text.UpstreamModel)
+	assert.Equal(t, "TEXT_LLM_API_KEY", text.APIKeyEnv)
+
+	embed, ok := reg.Get("env-embedding-model")
+	require.True(t, ok)
+	assert.True(t, embed.Supports("embeddings"))
+
+	_, ok = reg.Get("some-unconfigured-model")
+	assert.False(t, ok, "no model exists unless the environment names it")
+}
+
+// No role configured => no models => a loud boot failure, never a built-in
+// default model.
+func TestLoadFromEnvWithoutEnvIsEmptyRegistry(t *testing.T) {
+	clearEnvRoleVars(t)
+	_, err := registry.LoadFromEnv()
+	require.Error(t, err)
+	var cfgErr *registry.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "no models configured", cfgErr.Msg)
 }
 
 func TestLoadMissingFileNoEnvIsEmptyRegistry(t *testing.T) {
@@ -178,10 +212,9 @@ models:
 }
 
 // A row may omit base_url when the deployment supplies the endpoint through
-// the role-based env config. The deployment registry
-// (chora-stack/config/model-gateway/models.prod.yaml) declares no base_url on
-// any row, so this must load — refusing it is what stopped the Go gateway
-// from booting on the deployment registry.
+// the role-based env config. The env-built role specs inherit the endpoint for
+// their own kind from {PREFIX}_LLM_BASE_URL, so a row with no base_url must
+// load — refusing it would stop the gateway booting on an env-only deployment.
 func TestLoadAcceptsMissingBaseURLWithRoleBaseURL(t *testing.T) {
 	clearEnvRoleVars(t)
 	t.Setenv("TEXT_LLM_BASE_URL", "https://role.test/v1")
@@ -640,11 +673,11 @@ func TestEnvFormatSelectsVendor(t *testing.T) {
 
 func TestEnvImageRole(t *testing.T) {
 	clearEnvRoleVars(t)
-	t.Setenv("IMAGE_LLM_MODEL", "gpt-image-1")
+	t.Setenv("IMAGE_LLM_MODEL", "test-image-model")
 
 	reg, err := registry.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	require.NoError(t, err)
-	spec, ok := reg.Get("gpt-image-1")
+	spec, ok := reg.Get("test-image-model")
 	require.True(t, ok)
 	assert.Equal(t, registry.KindImage, spec.Kind)
 	assert.Equal(t, "openai", spec.Provider)
@@ -654,11 +687,11 @@ func TestEnvImageRole(t *testing.T) {
 
 func TestEnvEmbeddingRole(t *testing.T) {
 	clearEnvRoleVars(t)
-	t.Setenv("EMBEDDING_LLM_MODEL", "text-embedding-004")
+	t.Setenv("EMBEDDING_LLM_MODEL", "chora-embedding-test")
 
 	reg, err := registry.Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	require.NoError(t, err)
-	spec, ok := reg.Get("text-embedding-004")
+	spec, ok := reg.Get("chora-embedding-test")
 	require.True(t, ok)
 	assert.Equal(t, registry.KindEmbedding, spec.Kind)
 	assert.Equal(t, "embeddings", spec.Format) // EMBEDDING default format

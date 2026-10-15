@@ -2,7 +2,7 @@
 
 ## About
 
-`chora-model-gateway` is a Go service that presents Chora model access through OpenAI-compatible HTTP endpoints and the Chora `ModelGatewayService` gRPC contract. It resolves logical model IDs from environment-based role settings and `config/models.yaml`, dispatches to OpenAI-compatible, Anthropic, Gemini, or Vertex upstreams, and supports text, image generation, embeddings, and hosted web search. The gateway also enforces tenant budgets and writes metered usage events to the `chora_observability` database's transactional outbox.
+`chora-model-gateway` is a Go service that presents Chora model access through OpenAI-compatible HTTP endpoints and the Chora `ModelGatewayService` gRPC contract. It resolves logical model IDs from environment-based role settings only — there is no registry file and no built-in default model — dispatches to OpenAI-compatible, Anthropic, Gemini, or Vertex upstreams, and supports text, image generation, embeddings, and hosted web search. The gateway also enforces tenant budgets and writes metered usage events to the `chora_observability` database's transactional outbox.
 
 ## Quick start
 
@@ -31,24 +31,26 @@ For the Compose deployment:
 cp .env.example .env
 ```
 
-Set at least `CHORA_DATABASE_URL`, `CHORA_DEFAULT_TENANT_ID`, and the model role variables you need. The sample file uses these role settings:
+Set `CHORA_DATABASE_URL`, `CHORA_DEFAULT_TENANT_ID`, and every model role variable. Model configuration is env-only and REQUIRED — the gateway fails its boot unless each role below is set, and there is no registry file:
 
 ```env
-TEXT_LLM_BASE_URL=https://api.meta.ai/v1
+TEXT_LLM_BASE_URL=
 TEXT_LLM_FORMAT=responses
-TEXT_LLM_MODEL=muse-spark-1.3-contributor
+TEXT_LLM_MODEL=
 TEXT_LLM_API_KEY=
 
-IMAGE_LLM_BASE_URL=https://api.meta.ai/v1
+IMAGE_LLM_BASE_URL=
 IMAGE_LLM_FORMAT=images
-IMAGE_LLM_MODEL=muse-image-1.0
+IMAGE_LLM_MODEL=
 IMAGE_LLM_API_KEY=
 
-EMBEDDING_LLM_BASE_URL=https://api.openai.com/v1
+EMBEDDING_LLM_BASE_URL=
 EMBEDDING_LLM_FORMAT=embeddings
-EMBEDDING_LLM_MODEL=text-embedding-3-small
+EMBEDDING_LLM_MODEL=
 EMBEDDING_LLM_API_KEY=
 ```
+
+`EXA_API_KEY` supplies the hosted web-search provider. The logical model id a caller sends is the upstream model name the role declares.
 
 Start the gateway with:
 
@@ -121,9 +123,7 @@ Grounded requests can also use `Invoke` with `response_modality=GROUNDED` or the
 
 ### Model configuration
 
-There are two configuration paths.
-
-Environment role settings define one text, image, and embedding model with variables such as:
+Model configuration is entirely environment-driven. There is no registry file and no built-in default model: the gateway fails its boot unless at least one role is configured, and each role is defined by its own variables:
 
 ```text
 TEXT_LLM_BASE_URL
@@ -143,7 +143,7 @@ EMBEDDING_LLM_MODEL
 EMBEDDING_LLM_API_KEY
 ```
 
-For multiple logical models, aliases, fallbacks, capabilities, endpoint overrides, and pricing, use `config/models.yaml`. Each registry entry declares a provider (`openai` or `anthropic`), upstream model, base URL, capabilities, and optional fallback, pricing, credential, and grounding settings.
+Each configured role becomes one logical model whose id is the value of `{PREFIX}_LLM_MODEL`, dispatched to the OpenAI-compatible (or Anthropic, when `{PREFIX}_LLM_FORMAT=messages`) upstream at `{PREFIX}_LLM_BASE_URL` with the credential in `{PREFIX}_LLM_API_KEY`. The logical id a caller sends is the upstream model name. `EXA_API_KEY` supplies the hosted web-search provider.
 
 For a self-hosted OpenAI-compatible server running on the host, Compose provides `host.docker.internal`. For example:
 
@@ -189,8 +189,5 @@ internal/
     secrets/          Secret resolution
   domain/             Model resolution, budgets, fallbacks, and metering
   executor/           Dispatch executor
-  registry/           Model registry loading
-
-config/
-  models.yaml         Logical model registry
+  registry/           Model registry loading (env-role configuration)
 ```
