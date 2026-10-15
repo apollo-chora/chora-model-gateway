@@ -60,8 +60,7 @@ type VendorRequest struct {
 	LogicalModelID LogicalModelID
 	// BaseURL is the registry-declared endpoint for this logical model. When
 	// set it overrides the provider's constructed endpoint, so a registry
-	// route (e.g. the OpenAI-compatible longcat-2.5-preview on api.longcat.ai)
-	// dispatches to its own base_url rather than the provider default.
+	// route dispatches to its own base_url rather than the provider default.
 	BaseURL string
 	// UpstreamModel is the registry upstream_model to send to the provider.
 	// When set it overrides the logical id as the wire model name (the logical

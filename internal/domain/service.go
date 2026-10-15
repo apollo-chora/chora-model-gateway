@@ -75,6 +75,18 @@ type Service struct {
 	// embeddingPin, when non-nil, refuses an Embed request whose model is not
 	// the pinned logical id (CHORA_EMBEDDING_PIN_*). nil = unpinned.
 	embeddingPin *EmbeddingRoutePin
+
+	// defaultEmbeddingModel is the logical model id the Embed flow resolves
+	// when the caller omits logical_model_id. Sourced from EMBEDDING_LLM_MODEL
+	// (the deployment's single embedding role). Empty means the caller must
+	// send the model: there is no built-in default model.
+	defaultEmbeddingModel LogicalModelID
+
+	// defaultGroundedModel is the logical model id the GroundedSearch flow
+	// resolves when the request omits logical_model_id. Sourced from
+	// TEXT_LLM_MODEL (the deployment's text role, which synthesises the
+	// grounded answer). Empty means the caller must send the model.
+	defaultGroundedModel LogicalModelID
 }
 
 // ServiceConfig groups the ports + cross-cutting deps the gateway needs.
@@ -154,6 +166,18 @@ type ServiceConfig struct {
 	// id is refused rather than dispatched, so a runtime override cannot
 	// redirect the demo's embedding route. nil = unpinned.
 	EmbeddingPin *EmbeddingRoutePin
+
+	// DefaultEmbeddingModel is the logical model id the Embed flow resolves
+	// when the caller omits logical_model_id. Sourced from EMBEDDING_LLM_MODEL
+	// in production wiring. Empty means the caller must send one — there is no
+	// built-in default model.
+	DefaultEmbeddingModel LogicalModelID
+
+	// DefaultGroundedModel is the logical model id the GroundedSearch flow
+	// resolves when the request omits logical_model_id. Sourced from
+	// TEXT_LLM_MODEL in production wiring. Empty means the caller must send
+	// one — there is no built-in default model.
+	DefaultGroundedModel LogicalModelID
 
 	// Optional overrides for deterministic tests. Production wiring leaves
 	// these nil and the constructor substitutes time.Now + UUIDv7.
@@ -316,6 +340,9 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 		admission:    NewTenantConcurrencyLimiter(cfg.MaxConcurrentPerTenant),
 		embeddingPin: cfg.EmbeddingPin,
+
+		defaultEmbeddingModel: cfg.DefaultEmbeddingModel,
+		defaultGroundedModel:  cfg.DefaultGroundedModel,
 	}, nil
 }
 

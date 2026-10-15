@@ -183,6 +183,9 @@ func newGroundedTestServiceWithBudget(t *testing.T, budgetRequired bool, tenants
 		Grounded:       f.grounded,
 		Mana:           f.mana,
 		EgressAudit:    f.audit,
+		// The deployment's grounded-answer model (TEXT_LLM_MODEL). A grounded
+		// request that omits logical_model_id resolves here, as in production.
+		DefaultGroundedModel: "chora-text-test",
 		BudgetRequired: budgetRequired,
 		BudgetRequiredTenants: tenants,
 		Now:            fixedTime,
@@ -513,8 +516,8 @@ func TestGroundedSearch_VendorError_Surfaces(t *testing.T) {
 	assert.Equal(t, domain.EgressAuditDenied, f.audit.events[0].Result)
 }
 
-// A vendor error AFTER billable work (e.g. Exa search succeeded, LongCat
-// synthesis failed) must still account the partial spend: budget debit +
+// A vendor error AFTER billable work (e.g. Exa search succeeded, synthesis
+// failed) must still account the partial spend: budget debit +
 // ledger row, not just the audit event.
 func TestGroundedSearch_VendorError_PartialSpendIsAccounted(t *testing.T) {
 	svc, f := newGroundedTestService(t, func(f *groundedFakes) {

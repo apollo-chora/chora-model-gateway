@@ -51,7 +51,7 @@ func writeE2ERegistry(t *testing.T, baseURL string) string {
 	baseURL = strings.Replace(baseURL, "127.0.0.1", "localhost", 1)
 	content := `
 models:
-  - id: text-embedding-004
+  - id: chora-embedding-test
     provider: openai
     upstream_model: liquid/lfm-2.5-embedding-350m:free
     base_url: ` + baseURL + `/v1
@@ -116,7 +116,7 @@ func TestEmbed_EndToEnd_OmittedDimensionReachesTheWireWithNoOverride(t *testing.
 	require.NoError(t, err)
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	// The caller OMITS the dimension: the gateway must not invent one.
 	req.OutputDimensions = 0
 
@@ -180,7 +180,7 @@ func TestEmbed_EndToEnd_WrongLengthVectorIsRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 
 	_, err = svc.Embed(context.Background(), req)
 	require.Error(t, err)

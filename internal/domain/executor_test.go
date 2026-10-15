@@ -651,7 +651,7 @@ func TestExecute_FallbackVendorResolvesFromTheRegistry(t *testing.T) {
 		cfg.Providers = []domain.Provider{primary, fallback}
 		cfg.Policies = &fakePolicy{policy: domain.AgentPolicy{
 			AgentID:                "qgen_question",
-			ResolvedLogicalModelID: domain.LogicalModelID("longcat-2.5-preview"),
+			ResolvedLogicalModelID: domain.LogicalModelID("chora-text-test"),
 			Vendor:                 domain.VendorFamilyVertexGemini,
 			FallbackChain: []domain.AgentPolicyFallback{{
 				Vendor:                 domain.VendorFamilyVertexGemini,
@@ -659,13 +659,13 @@ func TestExecute_FallbackVendorResolvesFromTheRegistry(t *testing.T) {
 			}},
 		}}
 		cfg.Models = &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-			"longcat-2.5-preview": {ID: "longcat-2.5-preview", Vendor: domain.VendorFamilyOpenAI},
+			"chora-text-test": {ID: "chora-text-test", Vendor: domain.VendorFamilyOpenAI},
 			"fallback-model":      {ID: "fallback-model", Vendor: domain.VendorFamilyAnthropic},
 		}}
 	})
 
 	req := happyExecuteRequest()
-	req.LogicalModelID = domain.LogicalModelID("longcat-2.5-preview")
+	req.LogicalModelID = domain.LogicalModelID("chora-text-test")
 	req.FallbackModelIDs = []domain.LogicalModelID{"fallback-model"}
 
 	_, err := executor.Execute(context.Background(), req)

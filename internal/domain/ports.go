@@ -149,8 +149,8 @@ type ExternalEgressGate interface {
 
 // GroundedVendorClient dispatches a grounded web-search + synthesis call.
 // ONLY the exa adapter implements it — grounding rides Exa search/retrieve
-// plus a LongCat synthesis of the grounded answer (ADR-231 D1, Exa cutover
-// 2026-10-10; previously Vertex "Grounding with Google Search").
+// plus an OpenAI-compatible synthesis of the grounded answer (ADR-231 D1, Exa
+// cutover 2026-10-10; previously Vertex "Grounding with Google Search").
 type GroundedVendorClient interface {
 	// Family returns the VendorFamily backing grounded search.
 	Family() VendorFamily

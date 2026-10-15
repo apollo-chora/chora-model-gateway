@@ -45,7 +45,7 @@ type GroundedSearchRequest struct {
 	MaxResults int32
 
 	// OPTIONAL — grounding-capable logical model id (default resolved via the
-	// agent policy / DefaultGroundedModel).
+	// agent policy / the deployment's configured text model, TEXT_LLM_MODEL).
 	LogicalModelID LogicalModelID
 
 	// REQUIRED — the high-price external_egress mana action_code the gateway
@@ -133,12 +133,6 @@ const (
 	DefaultMaxResults int32 = 5
 	// MaxCitationsHardCap is the ceiling the gateway enforces on MaxResults.
 	MaxCitationsHardCap int32 = 10
-	// DefaultGroundedModel is the default grounded-answer model (ADR-231 D6).
-	// The grounded chain no longer rides a grounding-capable model's own web
-	// tool: the exa vendor does Exa retrieval + this model synthesises the
-	// grounded answer. Grounding is web-search capability, not a model
-	// feature, so a budget downgrade is NOT applied here.
-	DefaultGroundedModel LogicalModelID = "longcat-2.5-preview"
 )
 
 // GroundedVendorRequest is the contract between Service.GroundedSearch and the
@@ -146,8 +140,8 @@ const (
 type GroundedVendorRequest struct {
 	LogicalModelID LogicalModelID
 	// UpstreamModel is the registry upstream_model for the logical model — the
-	// concrete model name the vendor should call (e.g. "LongCat-2.5-Preview").
-	// Empty falls back to the logical id.
+	// concrete model name the vendor should call. Empty falls back to the
+	// logical id.
 	UpstreamModel string
 	// Directive is the Armor-screened learner directive.
 	Directive string

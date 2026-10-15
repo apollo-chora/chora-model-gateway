@@ -94,8 +94,11 @@ func newGroundedServer(t *testing.T, mods ...func(eg *fakeEgressGate, gv *fakeGr
 		Grounded:       gv,
 		Mana:           mn,
 		EgressAudit:    &fakeEgressAudit{},
-		Now:            func() time.Time { return time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC) },
-		NewID:          func() string { return "gs-id" },
+		// The deployment's grounded-answer model (TEXT_LLM_MODEL); a proto
+		// request that omits logical_model_id resolves here.
+		DefaultGroundedModel: "chora-text-test",
+		Now:                  func() time.Time { return time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC) },
+		NewID:                func() string { return "gs-id" },
 	})
 	require.NoError(t, err)
 	srvAdapter, err := modelgatewaygrpc.NewServer(svc, svc, svc)

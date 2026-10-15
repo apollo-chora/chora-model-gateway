@@ -63,7 +63,7 @@ func (b *blockingEmbedVendor) EmbedText(ctx context.Context, req domain.EmbedVen
 		b.entered <- struct{}{}
 		<-b.release
 	}
-	return domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004", InputTokens: 3}, nil
+	return domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test", InputTokens: 3}, nil
 }
 
 // blockingGroundedVendor is blockingVendor for the GroundedSearch path.
@@ -258,14 +258,14 @@ func newGroundedServiceWithLimit(t *testing.T, vendor domain.GroundedVendorClien
 // ----------------------------------------------------------------------------
 
 func TestEmbed_EmbeddingRoutePinRefusesOverride(t *testing.T) {
-	vendor := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"}}
+	vendor := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"}}
 	svc := newEmbedServiceWithConfig(t, false, nil, vendor, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
-		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{LogicalID: domain.DefaultEmbeddingModelID}
+		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{LogicalID: domain.LogicalModelID("chora-embedding-test")}
 	})
 
 	// The pinned id is accepted.
 	req := validEmbedRequest()
-	req.LogicalModelID = domain.DefaultEmbeddingModelID
+	req.LogicalModelID = domain.LogicalModelID("chora-embedding-test")
 	_, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
 

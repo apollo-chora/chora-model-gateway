@@ -60,14 +60,14 @@ func embedClients(embedder domain.EmbeddingClient) []domain.EmbeddingClient {
 }
 
 // embedModelResolver is the test registry: the deployment's embedding route.
-// The logical id `text-embedding-004` is an ALIAS — the entry behind it is an
+// The logical id `chora-embedding-test` is an ALIAS — the entry behind it is an
 // OpenAI-provider upstream, not a Google publisher model.
 func embedModelResolver() *mapModelResolver {
 	return &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:             "text-embedding-004",
+		"chora-embedding-test": {
+			ID:             "chora-embedding-test",
 			Vendor:         domain.VendorFamilyOpenAI,
-			UpstreamModel:  "text-embedding-004",
+			UpstreamModel:  "chora-embedding-test",
 			BaseURL:        "https://api.openai.com/v1",
 			Capabilities:   []string{"embeddings"},
 			APIKeyEnv:      "EMBEDDING_LLM_API_KEY",
@@ -98,6 +98,9 @@ func newEmbedServiceWithConfig(t *testing.T, budgetRequired bool, tenants domain
 		GatewayVersion: "chora-model-gateway:test",
 		Embedders:      embedClients(embedder),
 		Models:         embedModelResolver(),
+		// The deployment's embedding model (EMBEDDING_LLM_MODEL). A request
+		// that omits logical_model_id resolves here, exactly as in production.
+		DefaultEmbeddingModel: "chora-embedding-test",
 		BudgetRequired: budgetRequired,
 		BudgetRequiredTenants: tenants,
 		Now:            func() time.Time { return time.Unix(1754500000, 0) },
@@ -130,7 +133,7 @@ func TestEmbed_happyPathLedgersWithZeroCostAndBypassedMarkers(t *testing.T) {
 		family: domain.VendorFamilyOpenAI,
 		response: domain.EmbedVendorResponse{
 			Values:       []float32{0.1, 0.2, 0.3},
-			ModelVersion: "text-embedding-004",
+			ModelVersion: "chora-embedding-test",
 			InputTokens:  7,
 		},
 	}
@@ -144,7 +147,7 @@ func TestEmbed_happyPathLedgersWithZeroCostAndBypassedMarkers(t *testing.T) {
 	if len(resp.Values) != 3 {
 		t.Fatalf("want the vendor vector back; got %v", resp.Values)
 	}
-	if resp.ModelVersion != "text-embedding-004" {
+	if resp.ModelVersion != "chora-embedding-test" {
 		t.Errorf("model_version = %q", resp.ModelVersion)
 	}
 	if resp.Usage.CostMicros != 0 {
@@ -234,7 +237,7 @@ func TestEmbed_unwiredRegistryFailsLoud(t *testing.T) {
 func TestEmbed_outboxFailureFailsLoud(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	svc := newEmbedService(t, vendor, &fakeEmbedOutbox{err: errors.New("pg down")})
 	if _, err := svc.Embed(context.Background(), validEmbedRequest()); err == nil {
@@ -259,7 +262,7 @@ func TestEmbed_vendorErrorSurfaces(t *testing.T) {
 func TestEmbed_defaultsModelAndSendsNoDimensionsOverride(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	svc := newEmbedService(t, vendor, &fakeEmbedOutbox{})
 	req := validEmbedRequest()
@@ -268,8 +271,8 @@ func TestEmbed_defaultsModelAndSendsNoDimensionsOverride(t *testing.T) {
 	if _, err := svc.Embed(context.Background(), req); err != nil {
 		t.Fatalf("empty model/dims must default, not refuse: %v", err)
 	}
-	if vendor.lastReq.LogicalModelID != "text-embedding-004" {
-		t.Errorf("default model must be text-embedding-004; got %q", vendor.lastReq.LogicalModelID)
+	if vendor.lastReq.LogicalModelID != "chora-embedding-test" {
+		t.Errorf("default model must be chora-embedding-test; got %q", vendor.lastReq.LogicalModelID)
 	}
 	if vendor.lastReq.OutputDimensions != 0 {
 		t.Errorf("an omitted dimension must send NO override; got %d", vendor.lastReq.OutputDimensions)
@@ -285,7 +288,7 @@ func TestEmbed_defaultsModelAndSendsNoDimensionsOverride(t *testing.T) {
 func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	outbox := &fakeEmbedOutbox{}
 	svc := newEmbedServiceWithConfig(t, true, nil, vendor, outbox)
@@ -302,7 +305,7 @@ func TestEmbed_BudgetRequired_MissingWindow_RefusesBeforeVendor(t *testing.T) {
 func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	outbox := &fakeEmbedOutbox{}
 	svc := newEmbedServiceWithConfig(t, false, nil, vendor, outbox)
@@ -323,7 +326,7 @@ func TestEmbed_BudgetRequired_Off_MissingWindow_Allows(t *testing.T) {
 func TestEmbed_BudgetRequired_TenantListed_RefusesDespiteGlobalOff(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	outbox := &fakeEmbedOutbox{}
 	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}}, vendor, outbox)
@@ -341,7 +344,7 @@ func TestEmbed_BudgetRequired_TenantListed_RefusesDespiteGlobalOff(t *testing.T)
 func TestEmbed_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	outbox := &fakeEmbedOutbox{}
 	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"99999999-9999-7999-8999-999999999999": {}}, vendor, outbox)
@@ -358,7 +361,7 @@ func TestEmbed_BudgetRequired_TenantNotListed_Allows(t *testing.T) {
 func TestEmbed_BudgetRequired_TenantListed_ActiveWindow_Allows(t *testing.T) {
 	vendor := &fakeEmbedVendor{
 		family:   domain.VendorFamilyOpenAI,
-		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.1}, ModelVersion: "chora-embedding-test"},
 	}
 	outbox := &fakeEmbedOutbox{}
 	svc := newEmbedServiceWithConfig(t, false, domain.BudgetRequiredTenants{"11111111-1111-7111-8111-111111111111": {}}, vendor, outbox, func(cfg *domain.ServiceConfig) {

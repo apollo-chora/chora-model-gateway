@@ -17,7 +17,7 @@ import (
 // This is the defect the round-10 review found: the Embed flow was hard-wired
 // to the Vertex publisher adapter, so the effective embedding route on the Go
 // gateway was a PAID Google API even though the registry declared a free
-// OpenRouter upstream. The logical id `text-embedding-004` is an alias for the
+// OpenRouter upstream. The logical id `chora-embedding-test` is an alias for the
 // deployment's embedding route — it is not evidence about the vendor.
 //
 // Round 12 tightened the response side: the fake now returns a vector of the
@@ -31,12 +31,12 @@ func TestEmbed_OpenRouterRoute_NeverInvokesVertexAdapter(t *testing.T) {
 	vertex := &fakeEmbedVendor{family: domain.VendorFamilyVertexGemini}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		// Exactly the deployment's entry (chora-stack/config/model-gateway/
-		// models.prod.yaml): the historical logical id, an OpenRouter
-		// upstream, the OpenAI provider, no fallbacks, 1024-dimension output
-		// and no `dimensions` parameter support.
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		// Exactly the deployment's env-built entry (EMBEDDING_LLM_*): the
+		// historical logical id, an OpenRouter upstream, the OpenAI provider,
+		// no fallbacks, 1024-dimension output and no `dimensions` parameter
+		// support.
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -54,7 +54,7 @@ func TestEmbed_OpenRouterRoute_NeverInvokesVertexAdapter(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	req.OutputDimensions = 1024
 
 	resp, err := svc.Embed(context.Background(), req)
@@ -71,7 +71,7 @@ func TestEmbed_OpenRouterRoute_NeverInvokesVertexAdapter(t *testing.T) {
 		"the adapter must send the registry upstream_model, not the logical id")
 	assert.Equal(t, "https://openrouter.ai/api/v1", openrouter.lastReq.BaseURL,
 		"the adapter must dispatch to the registry base_url")
-	assert.Equal(t, domain.LogicalModelID("text-embedding-004"), openrouter.lastReq.LogicalModelID)
+	assert.Equal(t, domain.LogicalModelID("chora-embedding-test"), openrouter.lastReq.LogicalModelID)
 
 	// The requested dimension EQUALS the model's own, so no `dimensions`
 	// parameter is forwarded: the approved upstream rejects the parameter, and
@@ -93,7 +93,7 @@ func TestEmbed_OpenRouterRoute_NeverInvokesVertexAdapter(t *testing.T) {
 	// The ledger row attributes the route that ran.
 	require.Len(t, outbox.events, 1)
 	assert.Equal(t, string(domain.VendorFamilyOpenAI), outbox.events[0].Vendor)
-	assert.Equal(t, []string{string(domain.VendorFamilyOpenAI) + ":text-embedding-004"}, outbox.events[0].FallbackChain)
+	assert.Equal(t, []string{string(domain.VendorFamilyOpenAI) + ":chora-embedding-test"}, outbox.events[0].FallbackChain)
 }
 
 // embeddingVector builds a deterministic vector of n values.
@@ -122,8 +122,8 @@ func TestEmbed_ReturnedVectorLengthMismatch_IsRefused(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(768), ModelVersion: "liquid/lfm-2.5-embedding-350m:free"},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -139,7 +139,7 @@ func TestEmbed_ReturnedVectorLengthMismatch_IsRefused(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	req.OutputDimensions = 1024
 
 	_, err := svc.Embed(context.Background(), req)
@@ -160,8 +160,8 @@ func TestEmbed_RequestedDimensionTheModelCannotProduce_IsRefused(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(1024)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -176,7 +176,7 @@ func TestEmbed_RequestedDimensionTheModelCannotProduce_IsRefused(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	req.OutputDimensions = 768
 
 	_, err := svc.Embed(context.Background(), req)
@@ -196,8 +196,8 @@ func TestEmbed_OverrideCapableModel_HonoursRequestedDimensions(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(256)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                       "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                       "chora-embedding-test",
 			Vendor:                   domain.VendorFamilyOpenAI,
 			UpstreamModel:            "text-embedding-3-large",
 			BaseURL:                  "https://api.openai.com/v1",
@@ -213,7 +213,7 @@ func TestEmbed_OverrideCapableModel_HonoursRequestedDimensions(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	req.OutputDimensions = 256
 
 	resp, err := svc.Embed(context.Background(), req)
@@ -231,8 +231,8 @@ func TestEmbed_UndeclaredDimensions_SendsNoOverrideButValidatesTheResponse(t *te
 		response: domain.EmbedVendorResponse{Values: embeddingVector(512)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "self-hosted-embed",
 			BaseURL:       "https://llm.example.com/v1",
@@ -244,7 +244,7 @@ func TestEmbed_UndeclaredDimensions_SendsNoOverrideButValidatesTheResponse(t *te
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	req.OutputDimensions = 512
 
 	resp, err := svc.Embed(context.Background(), req)
@@ -266,8 +266,8 @@ func TestEmbed_UndeclaredDimensions_SendsNoOverrideButValidatesTheResponse(t *te
 func TestEmbed_EmptyVector_IsRefused(t *testing.T) {
 	openai := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "self-hosted-embed",
 			BaseURL:       "https://llm.example.com/v1",
@@ -280,7 +280,7 @@ func TestEmbed_EmptyVector_IsRefused(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	_, err := svc.Embed(context.Background(), req)
 	require.Error(t, err)
 	var dimErr *domain.DimensionMismatchError
@@ -297,8 +297,8 @@ func TestEmbed_PinnedRoute_RequiresTheApprovedVectorLength(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(1024)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:       "https://openrouter.ai/api/v1",
@@ -310,13 +310,13 @@ func TestEmbed_PinnedRoute_RequiresTheApprovedVectorLength(t *testing.T) {
 	svc := newEmbedServiceWithConfig(t, false, nil, openai, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
 		cfg.Models = reg
 		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{
-			LogicalID:          "text-embedding-004",
+			LogicalID:          "chora-embedding-test",
 			ExpectedDimensions: 1024,
 		}
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 
 	// Omitted dimension: no override, the pin's 1024 is required and met.
 	resp, err := svc.Embed(context.Background(), req)
@@ -362,8 +362,8 @@ func TestEmbed_PinnedRoute_NeverWalksFallbacks(t *testing.T) {
 	// adapter object lets the test observe every dispatch. The paid target is
 	// the fallback the pin must never reach.
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -388,13 +388,13 @@ func TestEmbed_PinnedRoute_NeverWalksFallbacks(t *testing.T) {
 	svc := newEmbedServiceWithConfig(t, false, nil, primary, outbox, func(cfg *domain.ServiceConfig) {
 		cfg.Models = reg
 		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{
-			LogicalID:          "text-embedding-004",
+			LogicalID:          "chora-embedding-test",
 			ExpectedDimensions: 1024,
 		}
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 
 	_, err := svc.Embed(context.Background(), req)
 	require.Error(t, err, "the pinned route is the only route; a failure must surface, not fall back")
@@ -418,8 +418,8 @@ func TestEmbed_UnpinnedRoute_StillWalksFallbacks(t *testing.T) {
 		failsLeft: 1,
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -445,7 +445,7 @@ func TestEmbed_UnpinnedRoute_StillWalksFallbacks(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 
 	resp, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
@@ -470,8 +470,8 @@ func TestEmbed_EachTargetCarriesItsOwnCredentialAndEndpoint(t *testing.T) {
 		failsLeft: 1,
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -497,7 +497,7 @@ func TestEmbed_EachTargetCarriesItsOwnCredentialAndEndpoint(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 
 	resp, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
@@ -525,8 +525,8 @@ func TestEmbed_NoCredentialReferenceOnAuthenticatedHost_IsRefused(t *testing.T) 
 		response: domain.EmbedVendorResponse{Values: embeddingVector(1024)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:             "https://openrouter.ai/api/v1",
@@ -540,7 +540,7 @@ func TestEmbed_NoCredentialReferenceOnAuthenticatedHost_IsRefused(t *testing.T) 
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	_, err := svc.Embed(context.Background(), req)
 	require.Error(t, err)
 	var credErr *domain.CredentialError
@@ -558,8 +558,8 @@ func TestEmbed_PinnedRoute_RequiresAConfiguredCredential(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(1024)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			// A host the credential table does not know: only the pin's own
@@ -572,13 +572,13 @@ func TestEmbed_PinnedRoute_RequiresAConfiguredCredential(t *testing.T) {
 	svc := newEmbedServiceWithConfig(t, false, nil, openai, &fakeEmbedOutbox{}, func(cfg *domain.ServiceConfig) {
 		cfg.Models = reg
 		cfg.EmbeddingPin = &domain.EmbeddingRoutePin{
-			LogicalID:          "text-embedding-004",
+			LogicalID:          "chora-embedding-test",
 			ExpectedDimensions: 1024,
 		}
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	_, err := svc.Embed(context.Background(), req)
 	require.Error(t, err)
 	var credErr *domain.CredentialError
@@ -595,8 +595,8 @@ func TestEmbed_PublicEndpointWithoutCredential_IsAllowed(t *testing.T) {
 		response: domain.EmbedVendorResponse{Values: embeddingVector(768)},
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:                  "text-embedding-004",
+		"chora-embedding-test": {
+			ID:                  "chora-embedding-test",
 			Vendor:              domain.VendorFamilyOpenAI,
 			UpstreamModel:       "self-hosted-embed",
 			BaseURL:             "https://llm.example.com/v1",
@@ -609,7 +609,7 @@ func TestEmbed_PublicEndpointWithoutCredential_IsAllowed(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	resp, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
 	assert.Len(t, resp.Values, 768)
@@ -627,14 +627,14 @@ func TestEmbed_RegistryRePoint_ChangesTheServingAdapter(t *testing.T) {
 	}
 	vertex := &fakeEmbedVendor{
 		family:   domain.VendorFamilyVertexGemini,
-		response: domain.EmbedVendorResponse{Values: []float32{0.9}, ModelVersion: "text-embedding-004"},
+		response: domain.EmbedVendorResponse{Values: []float32{0.9}, ModelVersion: "chora-embedding-test"},
 	}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyVertexGemini,
-			UpstreamModel: "text-embedding-004",
+			UpstreamModel: "chora-embedding-test",
 			BaseURL:       "https://asia-southeast1-aiplatform.googleapis.com",
 			Capabilities:  []string{"embeddings"},
 		},
@@ -646,7 +646,7 @@ func TestEmbed_RegistryRePoint_ChangesTheServingAdapter(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	resp, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
 
@@ -664,10 +664,10 @@ func TestEmbed_ProviderWithoutWiredAdapter_IsRefused(t *testing.T) {
 		// anthropic is a known provider with no embedding adapter. Its entry
 		// declares a credential, so the refusal under test is the MISSING
 		// ADAPTER, not the credential policy.
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyAnthropic,
-			UpstreamModel: "text-embedding-004",
+			UpstreamModel: "chora-embedding-test",
 			BaseURL:       "https://api.anthropic.com",
 			Capabilities:  []string{"embeddings"},
 			APIKeyEnv:     "ANTHROPIC_API_KEY",
@@ -711,8 +711,8 @@ func TestEmbed_NonEmbeddingCapability_IsRefused(t *testing.T) {
 	openai := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}}}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "gpt-4o",
 			BaseURL:       "https://api.openai.com/v1",
@@ -738,8 +738,8 @@ func TestEmbed_NoResolvableBaseURL_IsRefused(t *testing.T) {
 	openai := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}}}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:       "",
@@ -765,8 +765,8 @@ func TestEmbed_EmptyCredential_IsRefused(t *testing.T) {
 	openai := &fakeEmbedVendor{family: domain.VendorFamilyOpenAI, response: domain.EmbedVendorResponse{Values: []float32{0.1}}}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:       "https://openrouter.ai/api/v1",
@@ -823,8 +823,8 @@ func TestEmbed_FallbackChain_ResolvedWithTheSameChecks(t *testing.T) {
 	}
 
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:       "https://openrouter.ai/api/v1",
@@ -849,7 +849,7 @@ func TestEmbed_FallbackChain_ResolvedWithTheSameChecks(t *testing.T) {
 	})
 
 	req := validEmbedRequest()
-	req.LogicalModelID = "text-embedding-004"
+	req.LogicalModelID = "chora-embedding-test"
 	resp, err := svc.Embed(context.Background(), req)
 	require.NoError(t, err)
 
@@ -868,8 +868,8 @@ func TestEmbed_FallbackWithoutEmbeddingCapability_IsSkipped(t *testing.T) {
 		failsLeft:       1,
 	}
 	reg := &mapModelResolver{infos: map[domain.LogicalModelID]domain.ModelInfo{
-		"text-embedding-004": {
-			ID:            "text-embedding-004",
+		"chora-embedding-test": {
+			ID:            "chora-embedding-test",
 			Vendor:        domain.VendorFamilyOpenAI,
 			UpstreamModel: "liquid/lfm-2.5-embedding-350m:free",
 			BaseURL:       "https://openrouter.ai/api/v1",

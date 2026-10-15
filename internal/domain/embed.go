@@ -11,19 +11,6 @@ package domain
 
 import "time"
 
-// DefaultEmbeddingModelID is the resolved model when the caller leaves
-// logical_model_id empty. Matches both former direct call sites.
-const DefaultEmbeddingModelID LogicalModelID = "text-embedding-004"
-
-// embeddingModelAllowlist enumerates the model ids the Embed flow accepts.
-// A generation model on the embed path is refused, never silently
-// re-routed; extending this list is a reviewed edit.
-var embeddingModelAllowlist = map[LogicalModelID]bool{
-	DefaultEmbeddingModelID:           true,
-	"text-embedding-005":              true,
-	"text-multilingual-embedding-002": true,
-}
-
 // EmbeddingRoutePin pins the Embed flow to ONE logical model id for a
 // demo-specific deployment. When wired, a caller-supplied model that is not
 // the pinned id is refused rather than dispatched, so a runtime override

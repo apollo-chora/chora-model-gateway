@@ -97,7 +97,7 @@ func validEmbedRequest() *mgv1.EmbedRequest {
 		Gcid:             "gcid-1",
 		AgentId:          "consumption_memory_embedder",
 		CrewKind:         "familiar",
-		LogicalModelId:   "text-embedding-004",
+		LogicalModelId:   "chora-embedding-test",
 		Text:             "the learner practised bar charts",
 		TaskType:         "RETRIEVAL_DOCUMENT",
 		OutputDimensions: 768,
@@ -110,7 +110,7 @@ func TestEmbed_MapsEveryFieldInBothDirections(t *testing.T) {
 		InvocationID:   "0198f000-0000-7000-8000-000000000001",
 		Values:         []float32{0.5, -0.25, 0.125},
 		Vendor:         "vertex_gemini",
-		ModelVersion:   "text-embedding-004",
+		ModelVersion:   "chora-embedding-test",
 		Usage:          domain.TokenUsage{InputTokens: 7, CostMicros: 0},
 		CompletedAt:    completed,
 		GatewayVersion: "chora-model-gateway:test",
@@ -128,7 +128,7 @@ func TestEmbed_MapsEveryFieldInBothDirections(t *testing.T) {
 	assert.Equal(t, "gcid-1", got.GCID)
 	assert.Equal(t, "consumption_memory_embedder", got.AgentID)
 	assert.Equal(t, "familiar", got.CrewKind)
-	assert.Equal(t, domain.LogicalModelID("text-embedding-004"), got.LogicalModelID)
+	assert.Equal(t, domain.LogicalModelID("chora-embedding-test"), got.LogicalModelID)
 	assert.Equal(t, "the learner practised bar charts", got.Text)
 	assert.Equal(t, "RETRIEVAL_DOCUMENT", got.TaskType)
 	assert.Equal(t, int32(768), got.OutputDimensions)
@@ -136,7 +136,7 @@ func TestEmbed_MapsEveryFieldInBothDirections(t *testing.T) {
 	// Outbound: domain to proto.
 	assert.Equal(t, []float32{0.5, -0.25, 0.125}, resp.Values)
 	assert.Equal(t, "vertex_gemini", resp.Vendor)
-	assert.Equal(t, "text-embedding-004", resp.ModelVersion)
+	assert.Equal(t, "chora-embedding-test", resp.ModelVersion)
 	require.NotNil(t, resp.Usage)
 	assert.Equal(t, int64(7), resp.Usage.InputTokens)
 	assert.Equal(t, int64(0), resp.Usage.CostMicros,
@@ -293,8 +293,8 @@ func TestEmbed_RegistryRefusalsAreFailedPrecondition(t *testing.T) {
 		err  error
 	}{
 		{"unknown logical model", &domain.ConfigError{Detail: `embed: model "nope" is not in the registry`}},
-		{"resolved entry cannot serve embeddings", &domain.CapabilityError{Model: "text-embedding-004", Capability: "embeddings"}},
-		{"empty credential reference", &domain.CredentialError{Model: "text-embedding-004", APIKeyEnv: "EMBEDDING_LLM_API_KEY"}},
+		{"resolved entry cannot serve embeddings", &domain.CapabilityError{Model: "chora-embedding-test", Capability: "embeddings"}},
+		{"empty credential reference", &domain.CredentialError{Model: "chora-embedding-test", APIKeyEnv: "EMBEDDING_LLM_API_KEY"}},
 		{"no adapter for the resolved provider", &domain.NoProviderError{Family: domain.VendorFamilyOpenAI}},
 	}
 	for _, tc := range cases {

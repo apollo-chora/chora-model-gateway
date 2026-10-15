@@ -160,7 +160,7 @@ func (s *Service) GroundedSearch(ctx context.Context, req GroundedSearchRequest)
 	})
 	if err != nil {
 		// Partial-spend accounting: a vendor error AFTER billable work (e.g.
-		// the Exa search succeeded, the LongCat synthesis failed) must still
+		// the Exa search succeeded, the synthesis failed) must still
 		// debit the budget + write the ledger row — the provider billed even
 		// though the call did not complete.
 		if vendorResp.Usage.CostMicros > 0 {
@@ -265,19 +265,21 @@ func validateGroundedRequest(req GroundedSearchRequest) error {
 	return nil
 }
 
-// groundedModel resolves the grounding-capable model (request override or the
-// ADR-231 D6 default). Grounding requires a grounding-capable model, so a
-// budget downgrade to a cheaper non-grounding model is NOT applied here.
+// groundedModel resolves the grounding-capable model (the request override, or
+// the deployment's configured text model). Grounding requires a
+// grounding-capable model, so a budget downgrade to a cheaper non-grounding
+// model is NOT applied here. Empty when neither is set — the registry
+// resolution then fails loud rather than dispatching against a guessed id.
 func (s *Service) groundedModel(req GroundedSearchRequest) LogicalModelID {
 	if req.LogicalModelID != "" {
 		return req.LogicalModelID
 	}
-	return DefaultGroundedModel
+	return s.defaultGroundedModel
 }
 
 // groundedUpstream resolves the registry upstream_model for the grounded
-// logical model — the concrete model name the vendor calls (e.g.
-// "LongCat-2.5-Preview"). Empty when the registry has no entry.
+// logical model — the concrete model name the vendor calls. Empty when the
+// registry has no entry.
 func (s *Service) groundedUpstream(ctx context.Context, id LogicalModelID) string {
 	if s.models == nil {
 		return ""

@@ -318,9 +318,9 @@ func run() error {
 	// Domain service composition. The single *pg.Repo backs Budget + Outbox
 	// (Invoke) AND ExternalEgressGate + EgressAuditWriter (GroundedSearch,
 	// ADR-231); exaClient backs the grounded vendor port (Exa retrieval +
-	// LongCat synthesis, ADR-231 Exa cutover 2026-10-10 — previously geminiClient
-	// with Vertex "Grounding with Google Search"); DomainManaMeter is the
-	// grounded chain's mana port.
+	// OpenAI-compatible synthesis, ADR-231 Exa cutover 2026-10-10 — previously
+	// geminiClient with Vertex "Grounding with Google Search"); DomainManaMeter
+	// is the grounded chain's mana port.
 	// ---------------------------------------------------------------------
 	svc, err := domain.NewService(domain.ServiceConfig{
 		Vendors:        []domain.VendorClient{geminiClient, openaiClient, anthropicClient},
@@ -381,8 +381,13 @@ func run() error {
 		// request whose model is not the pinned logical id, so a runtime
 		// override cannot redirect the demo route. nil when disabled.
 		EmbeddingPin: cfg.embeddingPin.domainPin(),
-		Now:          time.Now,
-		NewID:        newInvocationID,
+		// The deployment's embedding + grounded-answer models, sourced from the
+		// same role env vars the registry is built from. A caller that omits
+		// logical_model_id resolves to these; neither is a built-in default.
+		DefaultEmbeddingModel: domain.LogicalModelID(os.Getenv("EMBEDDING_LLM_MODEL")),
+		DefaultGroundedModel:  domain.LogicalModelID(os.Getenv("TEXT_LLM_MODEL")),
+		Now:                   time.Now,
+		NewID:                 newInvocationID,
 		// The model-registry resolver backs the capability / output-ceiling /
 		// credential checks + the budget-downgrade re-resolution.
 		Models: modelResolver,
@@ -735,8 +740,8 @@ func (g *googleTokenProvider) Token(ctx context.Context) (string, error) {
 		// Lazily resolve the Google token source on FIRST use so the gateway
 		// boots on non-GCP hosts (no ADC, no metadata server). The Google-
 		// backed paths — Gemini/Vertex and Model Armor — fail only when
-		// actually called; the LongCat + Exa text/grounded paths are BYOA and
-		// never reach this. On GKE the first call resolves ADC as before.
+		// actually called; the BYOA text/grounded paths never reach this. On GKE
+		// the first call resolves ADC as before.
 		ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
 		if err != nil {
 			return "", fmt.Errorf("modelgateway: DefaultTokenSource: %w", err)
@@ -859,8 +864,8 @@ func (l *defaultPolicyLoader) ResolveAgentPolicy(ctx context.Context, agentID, c
 		ArmorTemplate:          l.armorTemplateBalanced,
 	}
 	// Non-GCP deployments (CHORA_ARMOR_ENABLED=false) have no Google token for
-	// Cloud Model Armor, so screen nothing (permissive). The LongCat + Exa
-	// paths are BYOA and do not depend on Armor.
+	// Cloud Model Armor, so screen nothing (permissive). The BYOA text/grounded
+	// paths do not depend on Armor.
 	if !l.armorEnabled {
 		policy.ArmorTemplate = ""
 	}

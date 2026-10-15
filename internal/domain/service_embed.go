@@ -16,8 +16,10 @@ import (
 //
 //  1. Validate required identity + text; refuse loud on any gap.
 //  2. Resolve invocation_id (caller-supplied or generated).
-//  3. Resolve model (default text-embedding-004) against the embedding
-//     allowlist; a generation model here is refused, never re-routed.
+//  3. Resolve the embedding model — the caller's logical_model_id, or the
+//     deployment's configured EMBEDDING_LLM_MODEL when omitted. A model whose
+//     resolved entry does not advertise `embeddings` is refused, never
+//     re-routed.
 //  4. Budget gate (fail-closed "budget required" mode only): with
 //     CHORA_LLM_BUDGET_REQUIRED, a missing active budget window refuses the
 //     embed before the vendor call. Default off — no budget read, historical
@@ -87,17 +89,21 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 
 	model := req.LogicalModelID
 	if model == "" {
-		model = DefaultEmbeddingModelID
+		model = s.defaultEmbeddingModel
+	}
+	// The embedding model is deployment-configured (EMBEDDING_LLM_MODEL, which
+	// callers send as EMBEDDING_LOGICAL_MODEL_ID). There is no built-in default
+	// model: a request that names none and has no configured role is refused
+	// loud rather than dispatched against a guessed id.
+	if model == "" {
+		return EmbedFlowResponse{}, errors.New("embed: logical_model_id required (no embedding model is configured via EMBEDDING_LLM_MODEL)")
 	}
 	// Demo-deployment route pin (CHORA_EMBEDDING_PIN_*): when wired, the ONLY
 	// accepted model is the pinned logical id. A runtime override that would
-	// redirect the demo's embedding route (including to another allowlisted
-	// embedding model) is refused BEFORE dispatch, never silently re-routed.
+	// redirect the demo's embedding route is refused BEFORE dispatch, never
+	// silently re-routed.
 	if s.embeddingPin != nil && model != s.embeddingPin.LogicalID {
 		return EmbedFlowResponse{}, fmt.Errorf("embed: model %q is refused; the embedding route is pinned to %q (CHORA_EMBEDDING_PIN_LOGICAL_ID)", model, s.embeddingPin.LogicalID)
-	}
-	if !embeddingModelAllowlist[model] {
-		return EmbedFlowResponse{}, fmt.Errorf("embed: model %q is not an embedding model; refusing (never silently re-routed)", model)
 	}
 
 	// The caller's requested dimension is passed through as-is: 0 means
@@ -163,9 +169,9 @@ func (s *Service) Embed(ctx context.Context, req EmbedFlowRequest) (EmbedFlowRes
 // through the embedding adapter registered for the RESOLVED provider family.
 //
 // A logical id is an alias, not a route. Nothing about the id's name shape
-// says which provider serves it: `text-embedding-004` is the deployment's
-// embedding ROUTE, and the registry entry behind it names an OpenRouter
-// upstream. The resolved configuration therefore decides provider, upstream
+// says which provider serves it: the deployment's embedding logical id names a
+// ROUTE, and the registry entry behind it (built from EMBEDDING_LLM_*) names
+// the upstream. The resolved configuration therefore decides provider, upstream
 // model, base URL and credential — and an entry whose provider has no wired
 // embedding adapter is refused rather than re-routed to whatever adapter
 // happens to be constructed.

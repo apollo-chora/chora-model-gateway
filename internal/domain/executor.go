@@ -712,16 +712,16 @@ func (e *Executor) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteRes
 
 	// The registry's provider for the logical model is the AUTHORITATIVE
 	// dispatch vendor — the policy's Vendor is the agent default (a Gemini-era
-	// hardcoded value). Resolve it so a non-Gemini registry route (e.g. the
-	// OpenAI-compatible longcat-2.5-preview) dispatches to the matching
-	// provider instead of the Gemini one.
+	// hardcoded value). Resolve it so a non-Gemini registry route (an
+	// OpenAI-compatible upstream) dispatches to the matching provider instead
+	// of the Gemini one.
 	//
 	// The agent-declared fallback chain carries the SAME stale default: the
 	// policy loader stamps every entry with policy.Vendor before this point,
 	// so a chain built for a Gemini-era deployment keeps Vertex. Re-resolve
 	// each entry too — otherwise a primary failure walks into a provider the
 	// deployment may hold no credentials for, and the run dies on a target
-	// that could never have served the request (observed live: a 30s LongCat
+	// that could never have served the request (observed live: a 30s text-model
 	// abort followed by an instant Vertex refusal, reported as
 	// `all 2 provider attempts failed; last provider "vertex_ai_gemini"`).
 	if e.fallback != nil && e.fallback.models != nil {
